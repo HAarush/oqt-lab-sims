@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fiber Optics Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .grid-bg {
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 15px 15px;
+            background-position: center;
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        function App() {
+          // --- CONSTANTS & PHYSICS ---
+          const TRUE_NA = 0.50; // Typical plastic fiber NA
+          const TRUE_THETA_RAD = Math.asin(TRUE_NA);
+          const TRUE_THETA_DEG = TRUE_THETA_RAD * (180 / Math.PI); // ~30 deg
+          
+          const TRUE_PIN = 5.00; // Source power in mW
+          const LOSS_PER_WINDING = 1.2; // dB loss per turn
+
+          // --- STATE ---
+          const [mode, setMode] = useState('NA'); // 'NA', 'BENDING', or 'ATTENUATION'
+          
+          // Part A State
+          const [distL, setDistL] = useState(10); // mm
+          const [dataA, setDataA] = useState([]);
+          
+          // Part B State
+          const [windings, setWindings] = useState(0); // 0, 1, 2, 3
+          const [dataB, setDataB] = useState([]);
+
+          // Part C State
+          const [setupC, setSetupC] = useState('1M'); // '1M', '3M', 'ADAPTER'
+          const [dataC, setDataC] = useState([]);
+
+          // Live values calculated from state
+          // Add slight gaussian-like noise for realism
+          const noise = useMemo(() => (Math.random() * 0.04) - 0.02, [distL, windings, setupC, mode]);
+          // W = 2 * L * tan(theta). Math.tan(30 deg) is approx 0.577. W approx 1.15 * L
+          const liveSpotW = (2 * distL * Math.tan(TRUE_THETA_RAD)) + (noise * 10); 
+          
+          // Pout = Pin * 10^(-Loss/10)
+          const liveLossDB = windings * LOSS_PER_WINDING;
+          const livePout = TRUE_PIN * Math.pow(10, -liveLossDB / 10) + noise;
+
+          // Part C Constants & Live Values
+          const LOSS_1M = 0.3; // dB loss per meter of fiber
+          const LOSS_ADAPTER = 0.8; // dB loss for the adapter
+          // Total length for Adapter setup is 1m + 3m = 4m
+          const liveLossC_DB = setupC === '1M' ? LOSS_1M : setupC === '3M' ? (LOSS_1M * 3) : (LOSS_1M * 4 + LOSS_ADAPTER);
+          const livePoutC = TRUE_PIN * Math.pow(10, -liveLossC_DB / 10) + noise;
+
+          // --- HANDLERS ---
+          const handleRecordNA = () => {
+              if (dataA.some(d => d.L === distL)) return; // Prevent duplicates
+              const newData = [...dataA, { L: distL, W: Math.max(0, liveSpotW) }];
+              newData.sort((a, b) => a.L - b.L);
+              setDataA(newData);
+          };
+
+          const handleRecordBending = () => {
+              if (dataB.some(d => d.windings === windings)) return;
+              const newData = [...dataB, { windings, Pout: Math.max(0, livePout) }];
+              newData.sort((a, b) => a.windings - b.windings);
+              setDataB(newData);
+          };
+
+          const handleRecordC = () => {
+              if (dataC.some(d => d.setup === setupC)) return;
+              const order = setupC === '1M' ? 1 : setupC === '3M' ? 2 : 3;
+              const newData = [...dataC, { setup: setupC, order, Pout: Math.max(0, livePoutC) }];
+              newData.sort((a, b) => a.order - b.order);
+              setDataC(newData);
+          };
+
+          const clearDataA = () => setDataA([]);
+          const clearDataB = () => setDataB([]);
+          const clearDataC = () => setDataC([]);
+
+          // --- CALCULATIONS FOR TABLES ---
+          const processedDataA = useMemo(() => {
+              let totalNA = 0;
+              const rows = dataA.map(row => {
+                  const na = row.W / Math.sqrt(4 * row.L * row.L + row.W * row.W);
+                  totalNA += na;
+                  return { ...row, na };
+              });
+              const meanNA = rows.length > 0 ? totalNA / rows.length : null;
+              const meanTheta = meanNA ? Math.asin(meanNA) * (180 / Math.PI) : null;
+              return { rows, meanNA, meanTheta };
+          }, [dataA]);
+
+          const processedDataB = useMemo(() => {
+              // Get reference power (0 windings) if recorded, else use exact true Pin
+              const refRow = dataB.find(d => d.windings === 0);
+              const Pin = refRow ? refRow.Pout : TRUE_PIN;
+              
+              const rows = dataB.map(row => {
+                  const loss = -10 * Math.log10(row.Pout / Pin);
+                  return { ...row, loss: Math.max(0, loss) };
+              });
+              return rows;
+          }, [dataB]);
+
+          const processedDataC = useMemo(() => {
+              const row1M = dataC.find(d => d.setup === '1M');
+              const row3M = dataC.find(d => d.setup === '3M');
+              const rowAdapter = dataC.find(d => d.setup === 'ADAPTER');
+
+              let fiberLoss = null;
+              if (row1M && row3M) {
+                  // Loss = 10 * log10(P1 / P2) / (L2 - L1) -> L2 - L1 = 3m - 1m = 2m
+                  fiberLoss = (10 * Math.log10(row1M.Pout / row3M.Pout)) / 2;
+              }
+
+              let adapterLoss = null;
+              if (row3M && rowAdapter && fiberLoss !== null) {
+                  // row3M is 3m of fiber. rowAdapter is 4m of fiber + adapter.
+                  // Total raw loss difference is 1m fiber + adapter.
+                  // To isolate adapter, subtract the fiberLoss (which is loss per 1 meter).
+                  const rawDiff = 10 * Math.log10(row3M.Pout / rowAdapter.Pout);
+                  adapterLoss = rawDiff - fiberLoss;
+              }
+
+              return { rows: dataC, fiberLoss, adapterLoss };
+          }, [dataC]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Fiber Optics</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">NA & Bending<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    
+                    <div className="flex gap-2 mb-6 p-1 bg-[#111] rounded-lg border border-gray-800">
+                      <button 
+                        onClick={() => setMode('NA')}
+                        className={`flex-1 py-1 text-[10px] sm:text-xs font-bold rounded uppercase tracking-wider transition-all ${mode === 'NA' ? 'bg-[#01998e] text-white shadow-[0_0_10px_rgba(1,153,142,0.5)]' : 'text-gray-500 hover:text-white'}`}
+                      >
+                        A: NA
+                      </button>
+                      <button 
+                        onClick={() => setMode('BENDING')}
+                        className={`flex-1 py-1 text-[10px] sm:text-xs font-bold rounded uppercase tracking-wider transition-all ${mode === 'BENDING' ? 'bg-[#e1f26c] text-black shadow-[0_0_10px_rgba(225,242,108,0.5)]' : 'text-gray-500 hover:text-white'}`}
+                      >
+                        B: Bend
+                      </button>
+                      <button 
+                        onClick={() => setMode('ATTENUATION')}
+                        className={`flex-1 py-1 text-[10px] sm:text-xs font-bold rounded uppercase tracking-wider transition-all ${mode === 'ATTENUATION' ? 'bg-[#01998e] text-white shadow-[0_0_10px_rgba(1,153,142,0.5)]' : 'text-gray-500 hover:text-white'}`}
+                      >
+                        C: Cable
+                      </button>
+                    </div>
+
+                    {mode === 'NA' && (
+                      <>
+                        <Section title="1. Aim">
+                          To determine the Numerical Aperture (NA) and the maximum Acceptance Angle (&theta;<sub className="text-[10px]">a</sub>) of a given optical fiber.
+                        </Section>
+                        <Section title="2. Formula">
+                          <p><strong>Numerical Aperture (NA):</strong></p>
+                          <div className="text-center my-3 text-[#e1f26c] font-mono text-lg">
+                            NA = W / &radic;(4L² + W²)
+                          </div>
+                          <p><strong>Acceptance Angle (&theta;<sub className="text-[10px]">a</sub>):</strong></p>
+                          <div className="text-center my-3 text-[#01998e] font-mono text-lg">
+                            &theta;<sub className="text-sm">a</sub> = sin⁻¹(NA)
+                          </div>
+                          <ul className="list-disc pl-5 space-y-1 text-xs">
+                            <li><strong>W:</strong> Diameter of the light spot on the screen.</li>
+                            <li><strong>L:</strong> Distance between the fiber tip and the screen.</li>
+                          </ul>
+                        </Section>
+                        <Section title="3. Procedure">
+                          <ol className="list-decimal pl-5 space-y-2 text-xs">
+                            <li>Connect fiber to the LED source.</li>
+                            <li>Hold the tip perpendicular to the NA jig at a distance (L).</li>
+                            <li>Observe the circular spot and measure its diameter (W).</li>
+                            <li>Repeat for different distances and calculate the average NA.</li>
+                          </ol>
+                        </Section>
+                      </>
+                    )}
+
+                    {mode === 'BENDING' && (
+                      <>
+                        <Section title="1. Aim">
+                          To measure the optical power loss in a fiber due to macro-bending (winding).
+                        </Section>
+                        <Section title="2. Formula for Loss">
+                          <p>Optical power loss (&alpha;) in decibels (dB):</p>
+                          <div className="text-center my-3 text-[#e1f26c] font-mono text-lg">
+                            Loss (dB) = -10 &times; log₁₀(P<sub className="text-xs">out</sub> / P<sub className="text-xs">in</sub>)
+                          </div>
+                          <ul className="list-disc pl-5 space-y-1 text-xs">
+                            <li><strong>P<sub className="text-[10px]">in</sub>:</strong> Output power with NO bending (0 windings).</li>
+                            <li><strong>P<sub className="text-[10px]">out</sub>:</strong> Output power with windings applied.</li>
+                          </ul>
+                        </Section>
+                        <Section title="3. Procedure">
+                          <ol className="list-decimal pl-5 space-y-2 text-xs">
+                            <li><strong>Reference:</strong> Keep fiber straight. Record power (0 windings).</li>
+                            <li><strong>1 Winding:</strong> Wrap the fiber one full turn around the mandrel. Record power.</li>
+                            <li><strong>2 & 3 Windings:</strong> Wrap additional turns and record. Light exceeding the critical angle escapes the core, causing loss.</li>
+                          </ol>
+                        </Section>
+                      </>
+                    )}
+
+                    {mode === 'ATTENUATION' && (
+                      <>
+                        <Section title="1. Aim">
+                          To measure the optical power loss caused by the fiber cable itself and an in-line optical adapter.
+                        </Section>
+                        <Section title="2. Formula for Loss">
+                          <p><strong>Fiber Attenuation (&alpha;):</strong></p>
+                          <div className="text-center my-3 text-[#e1f26c] font-mono text-sm">
+                            &alpha; = [10 / (L₂ - L₁)] &times; log₁₀(P₁ / P₂)
+                          </div>
+                          <p><strong>Adapter Loss:</strong></p>
+                          <div className="text-center my-3 text-[#01998e] font-mono text-sm">
+                            Loss = 10 &times; log₁₀(P₂ / P<sub className="text-[10px]">adapter</sub>) - &alpha;
+                          </div>
+                          <ul className="list-disc pl-5 space-y-1 text-xs">
+                            <li><strong>P₁:</strong> Power with 1m cable.</li>
+                            <li><strong>P₂:</strong> Power with 3m cable.</li>
+                            <li><strong>P<sub className="text-[10px]">adapter</sub>:</strong> Power with 1m + Adapter + 3m setup.</li>
+                          </ul>
+                        </Section>
+                        <Section title="3. Procedure">
+                          <ol className="list-decimal pl-5 space-y-2 text-xs">
+                            <li>Record reference power <strong>P₁</strong> using a standard 1m optical fiber.</li>
+                            <li>Replace with a 3m fiber and record <strong>P₂</strong> to measure distance attenuation.</li>
+                            <li>Connect a 1m and a 3m fiber using an adapter and record power to measure adapter insertion loss.</li>
+                          </ol>
+                        </Section>
+                      </>
+                    )}
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-start p-0 relative border-b border-gray-800 bg-[#050505] overflow-hidden grid-bg">
+                       
+                       {mode === 'NA' && (
+                         <div className="w-full h-full relative flex flex-col items-center justify-center">
+                            <span className="absolute top-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest bg-black/50 px-1 rounded">NA Jig (Side View)</span>
+                            
+                            {/* SVG Simulation NA */}
+                            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full absolute inset-0">
+                                {/* Base track */}
+                                <rect x="0" y="80" width="100" height="4" fill="#222" />
+                                
+                                {/* Fiber Stand & Tip */}
+                                <rect x="10" y="50" width="5" height="30" fill="#333" />
+                                <rect x="0" y="48" width="15" height="4" fill="#111" stroke="#444" />
+                                <circle cx="15" cy="50" r="1" fill="#ff4444" className="drop-shadow-[0_0_5px_#ff4444]" />
+
+                                {/* Moving Screen based on L (10 to 50 maps to 30 to 80 on SVG X) */}
+                                {(() => {
+                                   const screenX = 20 + (distL / 50) * 60;
+                                   const spotRadius = (liveSpotW / 2) * 0.8; // scaled for SVG
+                                   return (
+                                     <g>
+                                       {/* Light Cone */}
+                                       <path 
+                                         d={`M 15 50 L ${screenX} ${50 - spotRadius} L ${screenX} ${50 + spotRadius} Z`}
+                                         fill="url(#lightCone)" opacity="0.6"
+                                       />
+                                       <defs>
+                                         <linearGradient id="lightCone" x1="0%" y1="0%" x2="100%" y2="0%">
+                                            <stop offset="0%" stopColor="#ff4444" stopOpacity="0.8" />
+                                            <stop offset="100%" stopColor="#ff4444" stopOpacity="0.1" />
+                                         </linearGradient>
+                                       </defs>
+
+                                       {/* Screen Object */}
+                                       <rect x={screenX} y="15" width="2" height="70" fill="#ddd" stroke="#888" />
+                                       <rect x={screenX - 4} y="85" width="10" height="5" fill="#333" />
+                                       
+                                       {/* Dotted Line measuring L */}
+                                       <line x1="15" y1="90" x2={screenX} y2="90" stroke="#01998e" strokeWidth="0.5" strokeDasharray="2,1" />
+                                       <text x={(15 + screenX)/2} y="88" fill="#01998e" fontSize="4" textAnchor="middle">L = {distL} mm</text>
+                                     </g>
+                                   );
+                                })()}
+                            </svg>
+
+                            {/* Circular Screen Inset (Front View of NA Jig) */}
+                            <div className="absolute top-2 right-2 w-24 h-24 bg-white rounded shadow-[0_0_15px_rgba(255,255,255,0.2)] border-2 border-gray-400 flex items-center justify-center overflow-hidden">
+                                <span className="absolute top-1 left-1 text-[6px] text-black font-bold">Front Screen</span>
+                                {/* Concentric circles on jig */}
+                                {[10, 20, 30, 40].map(r => (
+                                    <div key={r} className="absolute rounded-full border border-gray-300" style={{ width: `${r*2}%`, height: `${r*2}%` }}></div>
+                                ))}
+                                {/* Actual Light Spot projected onto it */}
+                                <div 
+                                    className="absolute rounded-full bg-[#ff4444] blur-[2px] opacity-80"
+                                    style={{ 
+                                        width: `${(liveSpotW / 60) * 100}%`, // Max W around 60mm
+                                        height: `${(liveSpotW / 60) * 100}%`,
+                                        boxShadow: '0 0 10px #ff4444'
+                                    }}
+                                ></div>
+                                {/* Center dot */}
+                                <div className="absolute w-1 h-1 bg-black rounded-full"></div>
+                            </div>
+                         </div>
+                       )}
+
+                       {mode === 'BENDING' && (
+                         <div className="w-full h-full relative flex flex-col items-center justify-center">
+                            <span className="absolute top-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest bg-black/50 px-1 rounded">Macro-Bending Test</span>
+                            
+                            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full absolute inset-0">
+                                {/* Laser Source Left */}
+                                <rect x="5" y="40" width="15" height="20" fill="#1a1a1a" stroke="#01998e" rx="2" />
+                                <text x="12.5" y="51" fill="#01998e" fontSize="4" textAnchor="middle" fontWeight="bold">TX</text>
+                                
+                                {/* Power Meter Right */}
+                                <rect x="80" y="40" width="15" height="20" fill="#1a1a1a" stroke="#e1f26c" rx="2" />
+                                <text x="87.5" y="51" fill="#e1f26c" fontSize="4" textAnchor="middle" fontWeight="bold">RX</text>
+
+                                {/* Mandrel (Center) */}
+                                <circle cx="50" cy="50" r="15" fill="#222" stroke="#444" strokeWidth="2" />
+                                <circle cx="50" cy="50" r="2" fill="#111" />
+                                
+                                {/* Fiber connecting TX to Mandrel to RX */}
+                                {/* Base straight lines */}
+                                <path d="M 20 50 Q 35 50 40 35" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                <path d="M 60 65 Q 65 50 80 50" fill="none" stroke="#ff4444" strokeWidth="2" opacity={1 - (windings*0.1)} />
+
+                                {/* Draw the wound fiber rings around the mandrel based on state */}
+                                {windings > 0 && (
+                                    <>
+                                        {/* Winding 1 */}
+                                        <circle cx="50" cy="50" r="16" fill="none" stroke="#ff4444" strokeWidth="1.5" />
+                                        {/* Winding 2 */}
+                                        {windings > 1 && <circle cx="50" cy="50" r="17.5" fill="none" stroke="#ff4444" strokeWidth="1.5" />}
+                                        {/* Winding 3 */}
+                                        {windings > 2 && <circle cx="50" cy="50" r="19" fill="none" stroke="#ff4444" strokeWidth="1.5" />}
+                                        
+                                        {/* Light Leakage (Rays escaping outwards due to bend) */}
+                                        {Array.from({ length: windings * 6 }).map((_, i) => {
+                                            const angle = (i * 360) / (windings * 6);
+                                            const r1 = 15 + (windings * 1.5);
+                                            const r2 = r1 + 5 + Math.random() * 5;
+                                            return (
+                                                <line 
+                                                    key={i}
+                                                    x1={50 + r1 * Math.cos(angle * Math.PI/180)}
+                                                    y1={50 + r1 * Math.sin(angle * Math.PI/180)}
+                                                    x2={50 + r2 * Math.cos(angle * Math.PI/180)}
+                                                    y2={50 + r2 * Math.sin(angle * Math.PI/180)}
+                                                    stroke="#ff4444" strokeWidth="0.5" opacity="0.6"
+                                                />
+                                            )
+                                        })}
+                                    </>
+                                )}
+                                {/* If 0 windings, just connect straight through center roughly */}
+                                {windings === 0 && (
+                                    <path d="M 40 35 Q 50 20 60 65" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                )}
+                            </svg>
+
+                            {/* Digital Power Display Hovering near RX */}
+                            <div className="absolute top-1/2 -translate-y-1/2 right-[20%] bg-[#050505] border border-[#e1f26c] p-1 rounded">
+                                <div className="font-mono text-xs text-[#e1f26c]">{livePout.toFixed(2)} mW</div>
+                            </div>
+                         </div>
+                       )}
+
+                       {mode === 'ATTENUATION' && (
+                         <div className="w-full h-full relative flex flex-col items-center justify-center">
+                            <span className="absolute top-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest bg-black/50 px-1 rounded">Cable & Adapter Loss Setup</span>
+                            
+                            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full absolute inset-0">
+                                {/* Laser Source Left */}
+                                <rect x="5" y="40" width="15" height="20" fill="#1a1a1a" stroke="#01998e" rx="2" />
+                                <text x="12.5" y="51" fill="#01998e" fontSize="4" textAnchor="middle" fontWeight="bold">TX</text>
+                                
+                                {/* Power Meter Right */}
+                                <rect x="80" y="40" width="15" height="20" fill="#1a1a1a" stroke="#e1f26c" rx="2" />
+                                <text x="87.5" y="51" fill="#e1f26c" fontSize="4" textAnchor="middle" fontWeight="bold">RX</text>
+
+                                {/* 1M Cable Path */}
+                                {setupC === '1M' && (
+                                    <path d="M 20 50 Q 50 35 80 50" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                )}
+                                
+                                {/* 3M Cable Path (Double Looped) */}
+                                {setupC === '3M' && (
+                                    <path d="M 20 50 C 30 10, 70 10, 50 50 C 30 90, 70 90, 50 50 C 70 10, 90 10, 80 50" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                )}
+
+                                {/* Adapter Path (1m + 3m) */}
+                                {setupC === 'ADAPTER' && (
+                                    <>
+                                        <path d="M 20 50 Q 28 45 36 50" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                        <rect x="36" y="46" width="8" height="8" fill="#555" stroke="#888" rx="1" />
+                                        <text x="40" y="42" fill="#888" fontSize="4" textAnchor="middle" fontWeight="bold">Adapter</text>
+                                        <path d="M 44 50 C 50 10, 80 10, 60 50 C 40 90, 80 90, 80 50" fill="none" stroke="#ff4444" strokeWidth="2" />
+                                        <circle cx="37" cy="50" r="1" fill="#222" />
+                                        <circle cx="43" cy="50" r="1" fill="#222" />
+                                    </>
+                                )}
+                            </svg>
+
+                            {/* Digital Power Display Hovering near RX */}
+                            <div className="absolute top-1/2 -translate-y-1/2 right-[20%] bg-[#050505] border border-[#e1f26c] p-1 rounded">
+                                <div className="font-mono text-xs text-[#e1f26c]">{livePoutC.toFixed(2)} mW</div>
+                            </div>
+                         </div>
+                       )}
+
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {mode === 'NA' && (
+                        <>
+                          <div className="flex gap-2 justify-between">
+                            <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner">
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Distance (L)</span>
+                              <div className="font-mono text-2xl text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">
+                                  {distL.toFixed(1)} <span className="text-xs text-gray-400">mm</span>
+                              </div>
+                            </div>
+                            <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#01998e]"></div>
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Spot Diameter (W)</span>
+                              <div className="font-mono text-2xl md:text-3xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                                  {liveSpotW.toFixed(2)} <span className="text-sm text-gray-400">mm</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1 mt-2">
+                            <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                              <span>10 mm</span>
+                              <span className="text-[#01998e] font-bold">Move Screen (L)</span>
+                              <span>50 mm</span>
+                            </div>
+                            <input 
+                              type="range" min="10" max="50" step="1" value={distL} onChange={(e) => setDistL(parseInt(e.target.value))}
+                              className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                              style={{ background: `linear-gradient(to right, #01998e 0%, #e1f26c ${((distL-10)/40)*100}%, #333 ${((distL-10)/40)*100}%, #333 100%)` }}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button 
+                              onClick={handleRecordNA}
+                              className="py-2 bg-gradient-to-r from-[#01998e] to-[#017a72] text-white text-xs font-bold rounded shadow-[0_0_10px_rgba(1,153,142,0.4)] active:scale-95 transition-all"
+                            >
+                              Record NA Reading
+                            </button>
+                            <button 
+                              onClick={clearDataA}
+                              className="py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Clear Data
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {mode === 'BENDING' && (
+                        <>
+                          <div className="flex gap-2 justify-between">
+                            <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner">
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Active Windings</span>
+                              <div className="font-mono text-2xl text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">
+                                  {windings} <span className="text-xs text-gray-400">Turns</span>
+                              </div>
+                            </div>
+                            <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#e1f26c]"></div>
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Output Power (P<sub>out</sub>)</span>
+                              <div className="font-mono text-2xl md:text-3xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                                  {livePout.toFixed(2)} <span className="text-sm text-gray-400">mW</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 mt-2">
+                            {[0, 1, 2, 3].map(w => (
+                                <button 
+                                    key={w}
+                                    onClick={() => setWindings(w)}
+                                    className={`flex-1 py-2 text-xs font-bold rounded transition-all active:scale-95 ${windings === w ? 'bg-[#e1f26c] text-black shadow-[0_0_10px_rgba(225,242,108,0.5)]' : 'bg-gray-800 text-white hover:bg-gray-700 border border-gray-600'}`}
+                                >
+                                    {w === 0 ? 'Straight' : `${w} Winding${w > 1 ? 's' : ''}`}
+                                </button>
+                            ))}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button 
+                              onClick={handleRecordBending}
+                              className="py-2 bg-gradient-to-r from-[#e1f26c] to-[#b8ca4b] text-black text-xs font-bold rounded shadow-[0_0_10px_rgba(225,242,108,0.4)] active:scale-95 transition-all"
+                            >
+                              Record Loss Reading
+                            </button>
+                            <button 
+                              onClick={clearDataB}
+                              className="py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Clear Data
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {mode === 'ATTENUATION' && (
+                        <>
+                          <div className="flex gap-2 justify-between">
+                            <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner">
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Active Setup</span>
+                              <div className="font-mono text-xl text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] flex items-center justify-center h-8 mt-1">
+                                  {setupC === '1M' ? '1m Cable' : setupC === '3M' ? '3m Cable' : 'Adapter'}
+                              </div>
+                            </div>
+                            <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                              <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#01998e]"></div>
+                              <span className="text-[9px] uppercase text-gray-500 tracking-widest">Output Power (P<sub>out</sub>)</span>
+                              <div className="font-mono text-2xl md:text-3xl text-[#01998e] drop-shadow-[0_0_10px_rgba(1,153,142,0.5)]">
+                                  {livePoutC.toFixed(2)} <span className="text-sm text-gray-400">mW</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 mt-2">
+                            {['1M', '3M', 'ADAPTER'].map(s => (
+                                <button 
+                                    key={s}
+                                    onClick={() => setSetupC(s)}
+                                    className={`flex-1 py-2 text-[10px] sm:text-xs font-bold rounded transition-all active:scale-95 ${setupC === s ? 'bg-[#01998e] text-white shadow-[0_0_10px_rgba(1,153,142,0.5)]' : 'bg-gray-800 text-white hover:bg-gray-700 border border-gray-600'}`}
+                                >
+                                    {s === '1M' ? '1m Cable' : s === '3M' ? '3m Cable' : '1m + Adpt + 3m'}
+                                </button>
+                            ))}
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <button 
+                              onClick={handleRecordC}
+                              className="py-2 bg-gradient-to-r from-[#01998e] to-[#017a72] text-white text-xs font-bold rounded shadow-[0_0_10px_rgba(1,153,142,0.4)] active:scale-95 transition-all"
+                            >
+                              Record Setup Reading
+                            </button>
+                            <button 
+                              onClick={clearDataC}
+                              className="py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Clear Data
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    {/* TABLE A (NA) */}
+                    <Section title="Table A: Numerical Aperture">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">L (mm)</th>
+                              <th className="px-1 py-2">W (mm)</th>
+                              <th className="px-1 py-2">NA</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {processedDataA.rows.length === 0 && <tr><td colSpan="3" className="py-4 text-gray-500 italic">No NA data recorded.</td></tr>}
+                            {processedDataA.rows.map((row) => (
+                                <tr key={row.L} className="border-b border-gray-800 hover:bg-white/5">
+                                    <td className="px-1 py-2 font-bold text-white border-r border-gray-800 bg-[#050505]">{row.L}</td>
+                                    <td className="px-1 py-2 text-[#01998e] border-r border-gray-800">{row.W.toFixed(2)}</td>
+                                    <td className="px-1 py-2 text-[#e1f26c] font-bold">{row.na.toFixed(3)}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      
+                      {processedDataA.meanNA !== null && (
+                         <div className="mt-3 p-3 bg-black/40 border border-[#01998e] rounded text-sm space-y-2">
+                             <div className="flex justify-between">
+                                 <span className="text-gray-400">Mean NA:</span>
+                                 <span className="text-[#e1f26c] font-bold">{processedDataA.meanNA.toFixed(3)}</span>
+                             </div>
+                             <div className="flex justify-between">
+                                 <span className="text-gray-400">Acceptance &theta;<sub className="text-[10px]">a</sub>:</span>
+                                 <span className="text-[#01998e] font-bold">{processedDataA.meanTheta.toFixed(1)}&deg;</span>
+                             </div>
+                         </div>
+                      )}
+                    </Section>
+
+                    {/* TABLE B (BENDING) */}
+                    <Section title="Table B: Bending Loss">
+                      <div className="overflow-x-auto rounded-lg border border-[#e1f26c]/30">
+                        <table className="w-full text-xs text-center">
+                          <thead className="uppercase bg-[#e1f26c]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Condition</th>
+                              <th className="px-1 py-2">P<sub className="text-[8px]">out</sub> (mW)</th>
+                              <th className="px-1 py-2">Loss (dB)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {processedDataB.length === 0 && <tr><td colSpan="3" className="py-4 text-gray-500 italic">No Bending data recorded.</td></tr>}
+                            {processedDataB.map((row) => (
+                                <tr key={row.windings} className="border-b border-gray-800 hover:bg-white/5">
+                                    <td className="px-1 py-2 text-white border-r border-gray-800 bg-[#050505]">{row.windings === 0 ? 'Straight' : `${row.windings} Winding`}</td>
+                                    <td className="px-1 py-2 text-[#e1f26c] border-r border-gray-800">{row.Pout.toFixed(2)}</td>
+                                    <td className="px-1 py-2 text-[#ff4444] font-bold">{row.loss.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Small Live Loss Trend Graph */}
+                      {processedDataB.length > 1 && (
+                         <div className="mt-3 w-full h-24 bg-[#0a0a0a] rounded border border-gray-800 relative p-1">
+                            <span className="absolute top-1 left-2 text-[8px] text-gray-500 uppercase">Loss vs Windings Trend</span>
+                            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full mt-2">
+                                <line x1="10" y1="90" x2="90" y2="90" stroke="#333" strokeWidth="1"/>
+                                <line x1="10" y1="90" x2="10" y2="10" stroke="#333" strokeWidth="1"/>
+                                
+                                {processedDataB.map((pt, i, arr) => {
+                                    if (i === 0) return null;
+                                    const prev = arr[i-1];
+                                    const x1 = 10 + (prev.windings / 3) * 80;
+                                    const y1 = 90 - (prev.loss / 5) * 80; // Max loss approx 4-5dB
+                                    const x2 = 10 + (pt.windings / 3) * 80;
+                                    const y2 = 90 - (pt.loss / 5) * 80;
+                                    return (
+                                        <g key={i}>
+                                            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ff4444" strokeWidth="2" />
+                                            <circle cx={x2} cy={y2} r="3" fill="#e1f26c" />
+                                        </g>
+                                    );
+                                })}
+                                {/* Draw 0 winding point if it exists */}
+                                {processedDataB.find(d => d.windings===0) && (
+                                     <circle cx={10} cy={90} r="3" fill="#e1f26c" />
+                                )}
+                            </svg>
+                         </div>
+                      )}
+                    </Section>
+
+                    {/* TABLE C (ATTENUATION) */}
+                    <Section title="Table C: Cable & Adapter Loss">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Component Setup</th>
+                              <th className="px-1 py-2">P<sub className="text-[8px]">out</sub> (mW)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {processedDataC.rows.length === 0 && <tr><td colSpan="2" className="py-4 text-gray-500 italic">No Attenuation data recorded.</td></tr>}
+                            {processedDataC.rows.map((row) => (
+                                <tr key={row.setup} className="border-b border-gray-800 hover:bg-white/5">
+                                    <td className="px-1 py-2 text-white border-r border-gray-800 bg-[#050505]">{row.setup === '1M' ? '1m Cable' : row.setup === '3M' ? '3m Cable' : '1m + Adapter + 3m'}</td>
+                                    <td className="px-1 py-2 text-[#01998e] font-bold">{row.Pout.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {(processedDataC.fiberLoss !== null || processedDataC.adapterLoss !== null) && (
+                         <div className="mt-3 p-3 bg-black/40 border border-[#01998e] rounded text-sm space-y-2">
+                             <div className="flex justify-between border-b border-gray-800 pb-1">
+                                 <span className="text-gray-400">Fiber Attenuation:</span>
+                                 <span className="text-[#e1f26c] font-bold">{processedDataC.fiberLoss !== null ? processedDataC.fiberLoss.toFixed(2) + " dB/m" : "Need 1m & 3m"}</span>
+                             </div>
+                             <div className="flex justify-between pt-1">
+                                 <span className="text-gray-400">Adapter Loss:</span>
+                                 <span className="text-[#01998e] font-bold">{processedDataC.adapterLoss !== null ? processedDataC.adapterLoss.toFixed(2) + " dB" : "Need 3m & Adapter"}</span>
+                             </div>
+                         </div>
+                      )}
+                    </Section>
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

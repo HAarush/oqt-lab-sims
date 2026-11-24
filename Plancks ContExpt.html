@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Photoelectric Effect Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .vacuum-tube {
+            background: radial-gradient(ellipse at center, rgba(255,255,255,0.05) 0%, rgba(0,0,0,0.8) 100%);
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.9);
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // Physics Constants
+        const E_CHARGE = 1.602e-19; // Coulombs
+        const C_SPEED = 3e8; // m/s
+        const WORK_FUNCTION_EV = 1.8; // eV (Generic metal like Cesium/Alkali)
+        
+        const COLORS = [
+            { name: 'Red', wavelength: 650, hex: '#ff4444' },
+            { name: 'Green', wavelength: 532, hex: '#00ff00' },
+            { name: 'Blue', wavelength: 450, hex: '#00bfff' },
+            { name: 'Violet', wavelength: 405, hex: '#8a2be2' }
+        ];
+
+        function App() {
+          // --- STATE ---
+          const [activeColorIdx, setActiveColorIdx] = useState(2); // Default Blue
+          const [voltage, setVoltage] = useState(0.00); // Volts (-2.00 to 1.00)
+          const [recordedData, setRecordedData] = useState([]); // Max 2 entries
+
+          // Animation Ref
+          const requestRef = useRef();
+          const particlesRef = useRef([]);
+
+          const activeColor = COLORS[activeColorIdx];
+
+          // Calculate Physics for current state
+          const photonEnergyEV = 1240 / activeColor.wavelength;
+          // Stopping potential (magnitude) = E_photon - Phi. Note: actual applied V to stop it is negative.
+          const vStopMag = Math.max(0, photonEnergyEV - WORK_FUNCTION_EV);
+          const trueVStop = -vStopMag; // Negative voltage required to stop
+
+          // Photocurrent logic
+          let currentUa = 0;
+          if (photonEnergyEV > WORK_FUNCTION_EV) {
+              if (voltage >= trueVStop) {
+                  // I-V Curve approximation: saturation current at positive V, exponential drop near Vstop
+                  const iSat = 10.0; // max uA
+                  const k = 5; // steepness
+                  currentUa = iSat * (1 - Math.exp(-k * (voltage - trueVStop)));
+                  if (currentUa < 0) currentUa = 0;
+                  if (voltage > 0) currentUa = iSat; // Hard saturate
+              }
+          }
+
+          // Add slight noise to current if flowing
+          const displayCurrent = currentUa > 0 ? currentUa + (Math.random() * 0.04 - 0.02) : 0.00;
+
+          // --- ANIMATION EFFECT ---
+          useEffect(() => {
+              particlesRef.current = []; // Reset on mount
+              
+              const animate = () => {
+                  // Spawn new electrons if light is energetic enough
+                  if (photonEnergyEV > WORK_FUNCTION_EV && Math.random() < 0.3) {
+                      particlesRef.current.push({
+                          id: Math.random(),
+                          x: 20, // Start at Cathode
+                          y: 40 + Math.random() * 20,
+                          speed: 1 + Math.random() * 1.5,
+                          energy: vStopMag // Initial kinetic energy mapped to Vstop
+                      });
+                  }
+
+                  // Update particles
+                  particlesRef.current = particlesRef.current.filter(p => {
+                      // Acceleration depends on applied voltage. Negative V slows them down.
+                      // Map voltage directly to a velocity modifier
+                      const acceleration = voltage * 0.05; 
+                      p.speed += acceleration;
+                      
+                      p.x += p.speed;
+
+                      // If applied V is lower than the stopping potential, electrons reverse and die
+                      if (voltage < trueVStop && p.x > (20 + (p.energy / Math.abs(voltage - 0.01)) * 30)) {
+                          p.speed = -Math.abs(p.speed); // Bounce back
+                      }
+
+                      // Keep if within bounds
+                      return p.x > 15 && p.x < 85; 
+                  });
+
+                  // Trigger re-render for animation frame (using a dummy state or ref to force draw)
+                  // For purely React SVG animation, setting state rapidly can be laggy. 
+                  // We'll use a direct DOM manipulation or fast React state.
+                  setTick(t => t + 1);
+                  requestRef.current = requestAnimationFrame(animate);
+              };
+
+              requestRef.current = requestAnimationFrame(animate);
+              return () => cancelAnimationFrame(requestRef.current);
+          }, [photonEnergyEV, vStopMag, trueVStop, voltage]);
+
+          const [tick, setTick] = useState(0);
+
+          // --- HANDLERS ---
+          const handleVoltageChange = (e) => setVoltage(parseFloat(e.target.value));
+          
+          const adjustVoltage = (delta) => {
+              let newVal = voltage + delta;
+              if(newVal > 1) newVal = 1;
+              if(newVal < -2) newVal = -2;
+              setVoltage(parseFloat(newVal.toFixed(2)));
+          };
+
+          const recordData = () => {
+              if (recordedData.length >= 2) return; // Only need 2 points
+              if (recordedData.some(d => d.name === activeColor.name)) return; // Prevent duplicate colors
+              
+              // Find frequency: f = c / lambda
+              const freq = C_SPEED / (activeColor.wavelength * 1e-9);
+
+              const newData = [...recordedData, {
+                  name: activeColor.name,
+                  hex: activeColor.hex,
+                  wavelength: activeColor.wavelength,
+                  frequency: freq,
+                  vStop: voltage // Records CURRENT voltage slider position
+              }];
+              setRecordedData(newData);
+          };
+
+          const clearData = () => setRecordedData([]);
+
+          // --- CALCULATIONS ---
+          const calcResults = useMemo(() => {
+              if (recordedData.length !== 2) return null;
+              
+              const d1 = recordedData[0];
+              const d2 = recordedData[1];
+
+              // Formula: h = e(V1 - V2) / c(1/lambda1 - 1/lambda2)
+              // Ensure we subtract properly (magnitudes or direct algebra).
+              // e * V_stop = hc/lambda - Phi. V_stop is the negative value in our table.
+              // Magnitude of stopping potential |V_stop|:
+              const vMag1 = Math.abs(d1.vStop);
+              const vMag2 = Math.abs(d2.vStop);
+
+              const lambda1_m = d1.wavelength * 1e-9;
+              const lambda2_m = d2.wavelength * 1e-9;
+
+              const deltaV = Math.abs(vMag1 - vMag2);
+              const deltaInvLambda = Math.abs((1/lambda1_m) - (1/lambda2_m));
+
+              const calculatedH = (E_CHARGE * deltaV) / (C_SPEED * deltaInvLambda);
+              
+              return {
+                  deltaV: deltaV.toFixed(3),
+                  deltaInvLambda: deltaInvLambda.toExponential(3),
+                  h: calculatedH
+              };
+          }, [recordedData]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Planck's Constant</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">Photoelectric<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    
+                    <Section title="1. The Formula">
+                      <p>To calculate Planck’s Constant (<strong>h</strong>) using wavelengths (&lambda;), we use Einstein’s photoelectric equation for two different colors:</p>
+                      <div className="text-center my-4 text-[#e1f26c] font-mono text-xl bg-[#111] p-2 rounded border border-gray-800">
+                        h = <span className="text-[#01998e]">e(V₂ - V₁)</span> / <span className="text-white">c(1/&lambda;₂ - 1/&lambda;₁)</span>
+                      </div>
+                      <ul className="list-disc pl-5 space-y-1 text-xs">
+                        <li><strong>e:</strong> Electronic charge (1.602 &times; 10⁻¹⁹ C)</li>
+                        <li><strong>c:</strong> Speed of light (3 &times; 10⁸ m/s)</li>
+                        <li><strong>V₁, V₂:</strong> Stopping potentials (magnitudes).</li>
+                        <li><strong>&lambda;₁, &lambda;₂:</strong> Wavelengths (in meters).</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="2. I-V Graph Analysis">
+                      <p>The graph shows <strong>Photocurrent (I)</strong> vs. <strong>Retarding Potential (V)</strong>.</p>
+                      <ul className="list-disc pl-5 space-y-1 text-xs mt-2 text-gray-400">
+                        <li>The stopping potential is higher (more negative) for shorter wavelengths (e.g., Violet/Blue).</li>
+                        <li>Colors with smaller &lambda; (higher energy) require a larger negative voltage to stop the electrons.</li>
+                        <li>Saturation current is identical if light intensity remains constant.</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="3. Procedure">
+                      <ol className="list-decimal pl-5 space-y-2 text-xs text-gray-400">
+                        <li>Select <strong>Color 1</strong> (e.g., Violet).</li>
+                        <li>Adjust the <strong>Retarding Potential</strong> slider to the negative until the Photocurrent drops exactly to <strong>0.00 &mu;A</strong>.</li>
+                        <li>Click <strong>Record Reading</strong>.</li>
+                        <li>Select <strong>Color 2</strong> (e.g., Green) and repeat the process.</li>
+                        <li>The simulator will calculate the differences and output Planck's Constant.</li>
+                      </ol>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-0 relative border-b border-gray-800 bg-[#050505] overflow-hidden vacuum-tube">
+                       <span className="absolute top-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest">Vacuum Tube Apparatus</span>
+                       
+                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full absolute inset-0 drop-shadow-[0_0_15px_rgba(255,255,255,0.1)]">
+                           {/* Light Source Beam */}
+                           <path d="M 50 -10 L 15 40 L 25 60 Z" fill={activeColor.hex} opacity="0.15" />
+                           {/* Light Waves */}
+                           <path d="M 45 5 Q 35 15 25 25 T 15 45" fill="none" stroke={activeColor.hex} strokeWidth="1" strokeDasharray="2,2" opacity="0.6" />
+                           <path d="M 50 10 Q 40 20 30 30 T 20 50" fill="none" stroke={activeColor.hex} strokeWidth="1" strokeDasharray="2,2" opacity="0.6" />
+
+                           {/* Glass Tube */}
+                           <rect x="10" y="30" width="80" height="40" rx="15" fill="none" stroke="#555" strokeWidth="1.5" opacity="0.8" />
+                           
+                           {/* Cathode (Emitter Plate) */}
+                           <rect x="18" y="35" width="4" height="30" fill="#888" stroke="#ccc" strokeWidth="0.5" />
+                           <text x="20" y="70" fill="#888" fontSize="4" textAnchor="middle">Cathode</text>
+                           
+                           {/* Anode (Collector Plate) */}
+                           <rect x="78" y="35" width="4" height="30" fill="#888" stroke="#ccc" strokeWidth="0.5" />
+                           <text x="80" y="70" fill="#888" fontSize="4" textAnchor="middle">Anode</text>
+
+                           {/* Electrons */}
+                           {particlesRef.current.map(p => (
+                               <circle key={p.id} cx={p.x} cy={p.y} r="1" fill="#e1f26c" className="drop-shadow-[0_0_3px_#e1f26c]" />
+                           ))}
+
+                           {/* External Circuit Wiring */}
+                           <path d="M 20 65 L 20 85 L 45 85" fill="none" stroke="#01998e" strokeWidth="1.5" />
+                           <path d="M 80 65 L 80 85 L 55 85" fill="none" stroke="#01998e" strokeWidth="1.5" />
+                           
+                           {/* Variable Power Supply Symbol */}
+                           <circle cx="50" cy="85" r="5" fill="#111" stroke="#e1f26c" strokeWidth="1" />
+                           <line x1="47" y1="83" x2="53" y2="87" stroke="#e1f26c" strokeWidth="0.5" markerEnd="url(#arrow)" />
+                           <text x="50" y="93" fill="#e1f26c" fontSize="4" textAnchor="middle">V(adj)</text>
+                       </svg>
+
+                       <div className="absolute top-4 right-4 bg-black/60 border border-gray-700 p-2 rounded backdrop-blur">
+                          <div className="text-[8px] text-gray-500 uppercase tracking-widest mb-1">Incident Light</div>
+                          <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activeColor.hex, boxShadow: `0 0 8px ${activeColor.hex}` }}></div>
+                            <span className="font-mono text-sm" style={{ color: activeColor.hex }}>{activeColor.wavelength} nm</span>
+                          </div>
+                       </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {/* Meters */}
+                      <div className="flex gap-2 justify-between">
+                        <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#ff4444]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Voltmeter (V)</span>
+                          <div className="font-mono text-2xl md:text-3xl text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">
+                              {voltage > 0 ? "+" : ""}{voltage.toFixed(2)} <span className="text-sm text-gray-400">V</span>
+                          </div>
+                        </div>
+                        <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#e1f26c]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Ammeter (I)</span>
+                          <div className="font-mono text-2xl md:text-3xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                              {displayCurrent.toFixed(2)} <span className="text-sm text-gray-400">&mu;A</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Color Selector */}
+                      <div className="flex gap-2 mt-1">
+                        {COLORS.map((c, idx) => (
+                            <button 
+                                key={c.name}
+                                onClick={() => setActiveColorIdx(idx)}
+                                className={`flex-1 py-1.5 text-[10px] sm:text-xs font-bold rounded transition-all active:scale-95 border`}
+                                style={{ 
+                                    backgroundColor: activeColorIdx === idx ? `${c.hex}33` : '#111',
+                                    borderColor: activeColorIdx === idx ? c.hex : '#333',
+                                    color: activeColorIdx === idx ? c.hex : '#888',
+                                    boxShadow: activeColorIdx === idx ? `0 0 10px ${c.hex}44` : 'none'
+                                }}
+                            >
+                                {c.name}
+                            </button>
+                        ))}
+                      </div>
+
+                      {/* Voltage Slider */}
+                      <div className="space-y-1 mt-2">
+                        <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                          <span>-2.00 V (Retard)</span>
+                          <span className="text-[#01998e] font-bold">Adjust Potential</span>
+                          <span>+1.00 V (Accelerate)</span>
+                        </div>
+                        <input 
+                          type="range" min="-2.00" max="1.00" step="0.01" value={voltage} onChange={handleVoltageChange}
+                          className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                          style={{ background: `linear-gradient(to right, #ff4444 0%, #01998e ${((voltage+2)/3)*100}%, #333 ${((voltage+2)/3)*100}%, #333 100%)` }}
+                        />
+                        
+                        {/* Fine Tuning */}
+                        <div className="flex justify-between items-center gap-1 sm:gap-2 mt-2">
+                           <button onClick={() => adjustVoltage(-0.1)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#ff4444] border border-gray-700 font-mono">&laquo; -0.1V</button>
+                           <button onClick={() => adjustVoltage(-0.01)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#ff4444] border border-gray-700 font-mono">&lsaquo; -0.01V</button>
+                           <span className="text-[9px] text-gray-500 uppercase tracking-wider hidden sm:block">Fine Tune</span>
+                           <button onClick={() => adjustVoltage(0.01)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">+0.01V &rsaquo;</button>
+                           <button onClick={() => adjustVoltage(0.1)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">+0.1V &raquo;</button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <button 
+                          onClick={recordData}
+                          disabled={recordedData.length >= 2 || recordedData.some(d => d.name === activeColor.name)}
+                          className="py-2 bg-gradient-to-r from-[#01998e] to-[#017a72] text-white text-xs font-bold rounded shadow-[0_0_10px_rgba(1,153,142,0.4)] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Record V<sub className="text-[8px]">stop</sub> (Max 2)
+                        </button>
+                        <button 
+                          onClick={clearData}
+                          className="py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                        >
+                          Clear Readings
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    {/* Live I-V Graph */}
+                    <Section title="Live I-V Graph">
+                      <div className="w-full aspect-video bg-[#0a0a0a] rounded-lg border border-gray-800 relative flex items-center justify-center p-2">
+                        <span className="absolute top-1 left-2 text-[8px] text-gray-500 uppercase">Current (I) vs Voltage (V)</span>
+                        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full mt-3 overflow-visible">
+                          {/* Axes */}
+                          {/* V axis from -2 to +1. 0V is at x=66% */}
+                          <line x1="5" y1="85" x2="95" y2="85" stroke="#444" strokeWidth="1"/>
+                          <line x1="66.6" y1="5" x2="66.6" y2="85" stroke="#444" strokeWidth="1" strokeDasharray="2,2"/>
+                          
+                          <text x="95" y="92" fill="gray" fontSize="4" textAnchor="end">V (Volts)</text>
+                          <text x="6" y="8" fill="gray" fontSize="4">I (&mu;A)</text>
+                          <text x="66.6" y="92" fill="gray" fontSize="4" textAnchor="middle">0V</text>
+                          <text x="5" y="92" fill="gray" fontSize="4">-2V</text>
+
+                          {/* Draw Curves for Recorded Data + Active Color */}
+                          {[...recordedData, activeColor].filter((v, i, a) => a.findIndex(t => (t.name === v.name)) === i).map((colorObj, idx) => {
+                              const energyEV = 1240 / colorObj.wavelength;
+                              const vStop = -Math.max(0, energyEV - WORK_FUNCTION_EV);
+                              
+                              // Generate path points
+                              let path = `M 5 85 `;
+                              for(let v = -2.0; v <= 1.0; v += 0.1) {
+                                  let iVal = 0;
+                                  if(energyEV > WORK_FUNCTION_EV && v >= vStop) {
+                                      iVal = 10 * (1 - Math.exp(-5 * (v - vStop)));
+                                      if(v > 0) iVal = 10;
+                                  }
+                                  
+                                  // Map V (-2 to 1) -> X (5 to 95) => range 3V = 90px => x = 5 + (v+2)/3 * 90
+                                  const px = 5 + ((v + 2) / 3) * 90;
+                                  // Map I (0 to 10) -> Y (85 to 15) => range 10uA = 70px => y = 85 - (iVal/10)*70
+                                  const py = 85 - (iVal / 10) * 70;
+                                  
+                                  path += `L ${px} ${py} `;
+                              }
+                              
+                              return (
+                                <path 
+                                  key={colorObj.name} 
+                                  d={path} 
+                                  fill="none" 
+                                  stroke={colorObj.hex || COLORS.find(c=>c.name===colorObj.name).hex} 
+                                  strokeWidth={colorObj.name === activeColor.name ? "1.5" : "0.5"} 
+                                  opacity={colorObj.name === activeColor.name ? "1" : "0.5"} 
+                                />
+                              )
+                          })}
+
+                          {/* V_stop marker for active color */}
+                          {photonEnergyEV > WORK_FUNCTION_EV && (
+                              <circle 
+                                cx={5 + ((trueVStop + 2) / 3) * 90} 
+                                cy="85" 
+                                r="2" 
+                                fill={activeColor.hex} 
+                                className="animate-pulse"
+                              />
+                          )}
+                        </svg>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-400 italic">Adjust V until I = 0.00 &mu;A to find true stopping potential.</div>
+                    </Section>
+
+                    {/* TABLE */}
+                    <Section title="3. Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-[10px] sm:text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Color</th>
+                              <th className="px-1 py-2">&lambda; (nm)</th>
+                              <th className="px-1 py-2">Freq (Hz)</th>
+                              <th className="px-1 py-2">V<sub className="text-[8px]">stop</sub> (V)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {recordedData.length === 0 && <tr><td colSpan="4" className="py-4 text-gray-500 italic">No data recorded.</td></tr>}
+                            {recordedData.map((row, idx) => (
+                                <tr key={row.name} className="border-b border-gray-800 bg-black/40">
+                                    <td className="px-1 py-2 font-bold" style={{ color: row.hex }}>{row.name}</td>
+                                    <td className="px-1 py-2 text-white">{row.wavelength}</td>
+                                    <td className="px-1 py-2 text-gray-400">{row.frequency.toExponential(2)}</td>
+                                    <td className="px-1 py-2 text-[#ff4444] font-bold">{row.vStop.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Section>
+
+                    {calcResults && (
+                      <Section title="4. Final Calculation">
+                        <div className="space-y-4 font-mono text-sm bg-black/40 p-4 rounded-lg border border-[#e1f26c]/30 relative overflow-hidden">
+                          <div className="absolute right-0 top-0 w-1 h-full bg-[#e1f26c]"></div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">&Delta;V (V₂ - V₁):</span>
+                            <span className="text-white">{calcResults.deltaV} V</span>
+                          </div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">&Delta;(1/&lambda;) (m⁻¹):</span>
+                            <span className="text-white">{calcResults.deltaInvLambda}</span>
+                          </div>
+
+                          <div className="flex justify-between items-center pt-2">
+                            <span className="text-gray-400">Calculated h:</span>
+                            <span className="text-xl font-bold text-[#e1f26c] drop-shadow-[0_0_8px_rgba(225,242,108,0.5)]">
+                               {calcResults.h.toExponential(3)} J&middot;s
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center pt-1 text-xs">
+                            <span className="text-gray-500">True Planck's (h):</span>
+                            <span className="text-gray-400">6.626e-34 J&middot;s</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-gray-500">Error:</span>
+                            <span className="text-[#01998e]">
+                               {Math.abs(((calcResults.h - 6.626e-34)/6.626e-34)*100).toFixed(2)} %
+                            </span>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

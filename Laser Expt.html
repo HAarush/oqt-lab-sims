@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Laser Diffraction Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .graph-paper {
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 20px 20px;
+            background-position: center;
+        }
+        .graph-paper-fine {
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 2px 2px;
+            background-position: center;
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        function App() {
+          // --- CONSTANTS & PHYSICS ---
+          const TRUE_LAMBDA_NM = 650; // Typical red laser wavelength in nm
+          const LPI = 2500;
+          const LINES_PER_METER = LPI / 0.0254; // ~98425.2
+          const D_GRATING_M = 1 / LINES_PER_METER; // ~1.016e-5 m
+          const D_GRATING_NM = D_GRATING_M * 1e9; // 10160 nm
+
+          // Generate true spot positions based on distance D (cm)
+          const getTrueY = (n, D_cm) => {
+              if (n === 0) return 0;
+              const sinTheta = (n * TRUE_LAMBDA_NM) / D_GRATING_NM;
+              if (sinTheta >= 1) return null; // Beyond 90 degrees
+              const theta = Math.asin(sinTheta);
+              return D_cm * Math.tan(theta);
+          };
+
+          // --- STATE ---
+          const [distanceD, setDistanceD] = useState(50.0); // Distance D in cm
+          const [caliperPos, setCaliperPos] = useState(0.00); // Ruler/Caliper position in cm
+          const [activeOrder, setActiveOrder] = useState(1);
+          const [data, setData] = useState([
+              { n: 1, left: null, right: null },
+              { n: 2, left: null, right: null },
+              { n: 3, left: null, right: null }
+          ]);
+
+          // --- HANDLERS ---
+          const handleDistanceChange = (e) => {
+              setDistanceD(parseFloat(e.target.value));
+              // Clear data when changing distance to maintain experiment integrity
+              clearAll(); 
+          };
+          
+          const handleCaliperChange = (e) => setCaliperPos(parseFloat(e.target.value));
+          
+          const adjustCaliper = (delta) => {
+              let newVal = caliperPos + delta;
+              if(newVal > 20) newVal = 20;
+              if(newVal < -20) newVal = -20;
+              setCaliperPos(parseFloat(newVal.toFixed(2)));
+          };
+
+          const recordReading = (side) => {
+              setData(prevData => prevData.map(row => 
+                  row.n === activeOrder ? { ...row, [side]: Math.abs(caliperPos) } : row
+              ));
+          };
+
+          const clearAll = () => {
+              setData(data.map(row => ({ ...row, left: null, right: null })));
+              setCaliperPos(0.00);
+          };
+
+          // --- CALCULATIONS FOR TABLE & GRAPH ---
+          const processedData = useMemo(() => {
+              let validPoints = [];
+              const enhanced = data.map(row => {
+                  let meanY = null;
+                  let sinTheta = null;
+                  if (row.left !== null && row.right !== null) {
+                      meanY = (row.left + row.right) / 2;
+                      const theta = Math.atan(meanY / distanceD);
+                      sinTheta = Math.sin(theta);
+                      validPoints.push({ n: row.n, sinTheta });
+                  }
+                  return { ...row, meanY, sinTheta };
+              });
+
+              // Linear Regression (sinTheta vs n) -> y = mx
+              // Line must pass through origin (0,0) so slope m = Sum(x*y) / Sum(x^2)
+              let slope = null;
+              let calcLambda = null;
+              if (validPoints.length >= 2) {
+                  let sumNX = 0, sumN2 = 0;
+                  validPoints.forEach(p => {
+                      sumNX += p.n * p.sinTheta;
+                      sumN2 += p.n * p.n;
+                  });
+                  if (sumN2 !== 0) {
+                      slope = sumNX / sumN2;
+                      // lambda = slope * d
+                      calcLambda = slope * D_GRATING_NM;
+                  }
+              }
+
+              return { rows: enhanced, validPoints, slope, calcLambda };
+          }, [data, distanceD]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Laser Diffraction</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">Optics<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    <Section title="1. Aim">
+                      To determine the wavelength (&lambda;) of the given laser source using a plane transmission grating of 2500 lines per inch (LPI).
+                    </Section>
+                    
+                    <Section title="2. Apparatus">
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li><strong>Laser Source:</strong> Red semiconductor diode laser.</li>
+                        <li><strong>Diffraction Grating:</strong> 2500 Lines Per Inch (LPI).</li>
+                        <li><strong>Screen/Graph Sheet:</strong> To observe the diffraction pattern.</li>
+                        <li><strong>Optical Bench:</strong> To measure the distance between the grating and the screen.</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="3. Formula">
+                      <p>The wavelength is calculated using the diffraction equation:</p>
+                      <div className="text-center my-3 text-[#e1f26c] font-mono text-xl">
+                        &lambda; = (d &times; sin&theta;) / n
+                      </div>
+                      <ul className="list-disc pl-5 space-y-1 text-xs">
+                        <li><strong>n:</strong> Order of diffraction (e.g., 1, 2, 3).</li>
+                        <li><strong>d:</strong> Grating spacing (distance between two consecutive lines).</li>
+                        <li><strong>&theta;:</strong> Angle of diffraction.</li>
+                      </ul>
+                      <div className="mt-3 p-3 bg-black/50 border border-gray-700 rounded-lg">
+                        <p className="font-bold text-[#01998e] mb-1">Calculation of Spacing (d):</p>
+                        <p className="text-[10px] font-mono text-gray-400">
+                          For 2500 LPI:<br/>
+                          N = 2500 / 0.0254 = 98,425.2 lines/m<br/>
+                          d = 1 / N &approx; 1.016 &times; 10⁻⁵ m<br/>
+                          d = 10,160 nm
+                        </p>
+                      </div>
+                    </Section>
+                    
+                    <Section title="4. Procedure">
+                      <ol className="list-decimal pl-5 space-y-2">
+                        <li><strong>Alignment:</strong> Place laser, grating, and screen in a straight line.</li>
+                        <li><strong>Measurement D:</strong> Set the distance (D) between grating and screen.</li>
+                        <li><strong>Measurement y:</strong> Move the caliper to measure the distance from the central spot to the n<sup className="text-[9px]">th</sup> order spot on both Left and Right sides.</li>
+                        <li><strong>Angle:</strong> Calculate &theta; using &theta; = tan⁻¹(y/D).</li>
+                      </ol>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-start p-0 relative border-b border-gray-800 bg-[#050505] overflow-hidden">
+                       
+                       {/* 1. Top-Down Optical Bench View */}
+                       <div className="w-full h-[40%] bg-[#111] border-b border-gray-800 relative shadow-inner overflow-hidden flex items-center justify-center">
+                           <span className="absolute top-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest">Optical Bench (Top View)</span>
+                           
+                           <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full opacity-80">
+                               {/* Optical Bench Track */}
+                               <rect x="0" y="45" width="100" height="10" fill="#222" stroke="#333" />
+                               
+                               {/* Laser Source (Left) */}
+                               <rect x="5" y="40" width="15" height="20" fill="#1a1a1a" stroke="#444" rx="2" />
+                               <circle cx="20" cy="50" r="2" fill="#ff4444" />
+                               
+                               {/* Grating (Middle) */}
+                               <rect x="35" y="30" width="4" height="40" fill="#888" stroke="#ccc" />
+                               <text x="37" y="25" fill="#888" fontSize="4" textAnchor="middle">Grating</text>
+
+                               {/* Screen (Right) - Position moves based on D */}
+                               {/* Map D (10-100cm) to SVG X coords (45 to 95) */}
+                               <g transform={`translate(${45 + (distanceD/100)*50}, 0)`}>
+                                   <rect x="-2" y="10" width="4" height="80" fill="#fff" />
+                                   <text x="0" y="8" fill="#fff" fontSize="4" textAnchor="middle">Screen (D={distanceD}cm)</text>
+                               </g>
+
+                               {/* Laser Beams */}
+                               <line x1="20" y1="50" x2="35" y2="50" stroke="#ff4444" strokeWidth="1.5" /> {/* Incident */}
+                               
+                               {/* Diffracted Beams */}
+                               {[0, 1, -1, 2, -2, 3, -3].map(n => {
+                                   const screenX = 45 + (distanceD/100)*50;
+                                   const yOffset = getTrueY(n, distanceD);
+                                   if(yOffset === null) return null; // Beam reflects backwards
+                                   
+                                   // Scale physical Y offset to SVG view. Let's map 20cm to 40 SVG units.
+                                   const svgYOffset = (yOffset / 20) * 40;
+                                   
+                                   return (
+                                       <line 
+                                         key={n} 
+                                         x1="37" y1="50" 
+                                         x2={screenX} y2={50 + svgYOffset} 
+                                         stroke="#ff4444" 
+                                         strokeWidth={n===0 ? 1.5 : 1.0 - (Math.abs(n)*0.2)} 
+                                         strokeDasharray={n!==0 ? "2,1" : ""}
+                                         opacity={1.0 - (Math.abs(n)*0.2)}
+                                       />
+                                   );
+                               })}
+                           </svg>
+                       </div>
+
+                       {/* 2. Graph Paper Screen View (Front) */}
+                       <div className="w-full h-[60%] bg-[#1a1a1a] relative overflow-hidden flex items-center justify-center graph-paper">
+                           <div className="absolute inset-0 graph-paper-fine"></div>
+                           <span className="absolute bottom-2 left-2 text-[10px] text-gray-500 font-bold uppercase tracking-widest bg-black/50 px-1 rounded z-20">Screen View</span>
+                           
+                           {/* Render Spots on Screen */}
+                           {/* Screen spans from -20cm to +20cm across 100% width */}
+                           <div className="w-full h-8 relative z-10 flex items-center">
+                               {/* Center line (0 cm) */}
+                               <div className="absolute left-1/2 top-[-50px] bottom-[-50px] w-[1px] bg-white/20"></div>
+
+                               {[0, 1, -1, 2, -2, 3, -3].map(n => {
+                                   const y = getTrueY(n, distanceD);
+                                   if(y === null || Math.abs(y) > 22) return null; // Off screen
+                                   
+                                   // Map -20cm -> 0%, 0cm -> 50%, +20cm -> 100%
+                                   const leftPercent = 50 + (y / 20) * 50;
+                                   const intensity = 1.0 - (Math.abs(n) * 0.25);
+                                   
+                                   return (
+                                       <div 
+                                         key={n}
+                                         className="absolute w-3 h-3 md:w-4 md:h-4 bg-[#ff4444] rounded-full -translate-x-1/2 -translate-y-1/2 top-1/2"
+                                         style={{ 
+                                             left: `${leftPercent}%`, 
+                                             opacity: intensity,
+                                             boxShadow: `0 0 ${10 + (intensity*10)}px #ff4444, inset 0 0 4px #fff` 
+                                         }}
+                                       >
+                                           <span className="absolute -top-6 left-1/2 -translate-x-1/2 text-[8px] text-white opacity-50">n={n}</span>
+                                       </div>
+                                   );
+                               })}
+
+                               {/* Movable Caliper Cursor */}
+                               <div 
+                                 className="absolute top-[-100px] bottom-[-100px] w-[2px] bg-[#01998e] shadow-[0_0_8px_#01998e] z-20 -translate-x-1/2 pointer-events-none"
+                                 style={{ left: `${50 + (caliperPos / 20) * 50}%` }}
+                               >
+                                  {/* Triangle pointer at bottom */}
+                                  <div className="absolute bottom-[90px] left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-b-[8px] border-l-transparent border-r-transparent border-b-[#01998e]"></div>
+                               </div>
+                           </div>
+                       </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {/* Displays */}
+                      <div className="flex gap-2 justify-between">
+                        <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner">
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Distance (D)</span>
+                          <div className="font-mono text-2xl text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">
+                              {distanceD.toFixed(1)} <span className="text-xs text-gray-400">cm</span>
+                          </div>
+                        </div>
+                        <div className="flex-[1.5] bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#01998e]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Caliper Position (y)</span>
+                          <div className="font-mono text-2xl md:text-3xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                              {caliperPos.toFixed(2)} <span className="text-sm text-gray-400">cm</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Distance D Slider */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                          <span>10 cm</span>
+                          <span className="text-white font-bold">Set Grating-to-Screen Distance (D)</span>
+                          <span>100 cm</span>
+                        </div>
+                        <input 
+                          type="range" min="10" max="100" step="1" value={distanceD} onChange={handleDistanceChange}
+                          className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                          style={{ background: `linear-gradient(to right, #ffffff 0%, #aaa ${((distanceD-10)/90)*100}%, #333 ${((distanceD-10)/90)*100}%, #333 100%)` }}
+                        />
+                      </div>
+
+                      {/* Caliper Slider */}
+                      <div className="space-y-1 mt-2">
+                        <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                          <span>Left (-20cm)</span>
+                          <span className="text-[#e1f26c] font-bold">Move Screen Caliper (y)</span>
+                          <span>Right (+20cm)</span>
+                        </div>
+                        <input 
+                          type="range" min="-20" max="20" step="0.01" value={caliperPos} onChange={handleCaliperChange}
+                          className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                          style={{ background: `linear-gradient(to right, #01998e 0%, #e1f26c ${((caliperPos+20)/40)*100}%, #333 ${((caliperPos+20)/40)*100}%, #333 100%)` }}
+                        />
+                        
+                        {/* Fine Tuning */}
+                        <div className="flex justify-between items-center gap-1 sm:gap-2 mt-2">
+                           <button onClick={() => adjustCaliper(-0.1)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">&laquo; -0.1</button>
+                           <button onClick={() => adjustCaliper(-0.01)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#e1f26c] border border-gray-700 font-mono">&lsaquo; -0.01</button>
+                           <span className="text-[9px] text-gray-500 uppercase tracking-wider hidden sm:block">Fine Tune</span>
+                           <button onClick={() => adjustCaliper(0.01)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#e1f26c] border border-gray-700 font-mono">+0.01 &rsaquo;</button>
+                           <button onClick={() => adjustCaliper(0.1)} className="px-2 py-1 bg-gray-800 text-[10px] rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">+0.1 &raquo;</button>
+                        </div>
+                      </div>
+
+                      {/* Recording Controls */}
+                      <div className="grid grid-cols-3 gap-2 mt-2 bg-[#111] p-2 rounded-lg border border-gray-800">
+                        <div className="col-span-1 flex flex-col justify-center">
+                            <label className="text-[9px] text-gray-400 uppercase tracking-wider mb-1">Target Order (n)</label>
+                            <select 
+                                className="bg-[#222] border border-gray-600 text-white text-sm rounded py-1 px-2 font-mono outline-none focus:border-[#e1f26c]"
+                                value={activeOrder}
+                                onChange={(e) => setActiveOrder(parseInt(e.target.value))}
+                            >
+                                <option value="1">n = 1</option>
+                                <option value="2">n = 2</option>
+                                <option value="3">n = 3</option>
+                            </select>
+                        </div>
+                        <div className="col-span-2 flex gap-2">
+                            <button 
+                              onClick={() => recordReading('left')}
+                              className="flex-1 py-1 bg-transparent hover:bg-[#01998e]/20 border border-[#01998e] text-[#01998e] text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Record Left (y₁)
+                            </button>
+                            <button 
+                              onClick={() => recordReading('right')}
+                              className="flex-1 py-1 bg-transparent hover:bg-[#e1f26c]/20 border border-[#e1f26c] text-[#e1f26c] text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Record Right (y₂)
+                            </button>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={clearAll}
+                        className="w-full mt-1 py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-[10px] uppercase tracking-widest font-bold rounded transition-all active:scale-95"
+                      >
+                        Reset Table Data
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    <Section title="5. Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Order(n)</th>
+                              <th className="px-1 py-2">y₁ (cm)</th>
+                              <th className="px-1 py-2">y₂ (cm)</th>
+                              <th className="px-1 py-2">y (cm)</th>
+                              <th className="px-1 py-2">sin&theta;</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {processedData.rows.map((row) => (
+                                <tr key={row.n} className={`border-b border-gray-800 ${row.n === activeOrder ? 'bg-white/10' : 'hover:bg-white/5'}`}>
+                                    <td className="px-1 py-2 font-bold text-white border-r border-gray-800 bg-[#050505]">{row.n}</td>
+                                    <td className="px-1 py-2 text-[#01998e]">{row.left !== null ? row.left.toFixed(2) : '---'}</td>
+                                    <td className="px-1 py-2 text-[#e1f26c] border-r border-gray-800">{row.right !== null ? row.right.toFixed(2) : '---'}</td>
+                                    <td className="px-1 py-2 text-gray-300">{row.meanY !== null ? row.meanY.toFixed(2) : '---'}</td>
+                                    <td className="px-1 py-2 font-bold text-white bg-black/40">{row.sinTheta !== null ? row.sinTheta.toFixed(4) : '---'}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-500 italic text-center">
+                        y = (|y₁| + |y₂|) / 2. <br/> sin&theta; = sin(tan⁻¹(y/D)).
+                      </div>
+                    </Section>
+
+                    <Section title="6. Graph (sin&theta; vs n)">
+                      <div className="w-full aspect-video bg-[#0a0a0a] rounded-lg border border-gray-800 relative flex items-center justify-center">
+                        {processedData.validPoints.length < 2 ? (
+                            <span className="text-gray-600 text-[10px] sm:text-xs italic">Record at least 2 orders to generate graph.</span>
+                        ) : (
+                            <svg viewBox="0 0 100 100" className="w-full h-full p-2 overflow-visible" preserveAspectRatio="none">
+                              {/* Axes */}
+                              <line x1="10" y1="90" x2="95" y2="90" stroke="gray" strokeWidth="1"/>
+                              <line x1="10" y1="90" x2="10" y2="5" stroke="gray" strokeWidth="1"/>
+                              <text x="50" y="98" fill="gray" fontSize="4" textAnchor="middle">Order (n)</text>
+                              <text x="2" y="50" fill="gray" fontSize="4" textAnchor="middle" transform="rotate(-90 2 50)">sin&theta;</text>
+                              
+                              {/* Grid Lines */}
+                              {[1, 2, 3].map(x => <line key={`vx${x}`} x1={10 + (x/3)*85} y1="90" x2={10 + (x/3)*85} y2="5" stroke="#333" strokeWidth="0.5" strokeDasharray="1,2"/>)}
+                              {[0.05, 0.10, 0.15, 0.20, 0.25].map(y => <line key={`hy${y}`} x1="10" y1={90 - (y/0.25)*85} x2="95" y2={90 - (y/0.25)*85} stroke="#333" strokeWidth="0.5" strokeDasharray="1,2"/>)}
+
+                              {/* Best Fit Line */}
+                              {processedData.slope !== null && (
+                                 <line 
+                                   x1={10} 
+                                   y1={90} 
+                                   x2={10 + (3/3)*85} 
+                                   y2={90 - ((processedData.slope * 3)/0.25)*85} 
+                                   stroke="#01998e" 
+                                   strokeWidth="1.5" 
+                                   strokeDasharray="2,2"
+                                 />
+                              )}
+
+                              {/* Data Points */}
+                              {processedData.validPoints.map((pt, i) => {
+                                // Scale logic: X (0-3) maps to (10-95), Y (0-0.25) maps to (90-5)
+                                const cx = 10 + (pt.n / 3) * 85;
+                                const cy = 90 - (pt.sinTheta / 0.25) * 85;
+                                return (
+                                  <circle key={i} cx={cx} cy={cy} r="2" fill="#e1f26c" className="drop-shadow-[0_0_3px_#e1f26c]" />
+                                )
+                              })}
+                            </svg>
+                        )}
+                      </div>
+                      <div className="mt-3 flex justify-between text-xs text-gray-400 font-mono">
+                        <span>Slope (m): {processedData.slope ? processedData.slope.toFixed(4) : "0.0000"}</span>
+                      </div>
+                    </Section>
+
+                    {processedData.calcLambda !== null && (
+                      <Section title="7. Result">
+                        <div className="space-y-4 font-mono text-sm bg-black/40 p-4 rounded-lg border border-gray-800 relative overflow-hidden">
+                          <div className="absolute right-0 top-0 w-1 h-full bg-[#e1f26c]"></div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Grating Spacing (d):</span>
+                            <span className="text-white">{D_GRATING_NM.toFixed(0)} nm</span>
+                          </div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Calculated &lambda;:</span>
+                            <span className="text-2xl font-bold text-[#e1f26c] drop-shadow-[0_0_8px_rgba(225,242,108,0.5)]">
+                               {processedData.calcLambda.toFixed(1)} nm
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center pt-1 text-xs">
+                            <span className="text-gray-500">True &lambda; (Red Laser):</span>
+                            <span className="text-gray-400">{TRUE_LAMBDA_NM} nm</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-gray-500">Error:</span>
+                            <span className="text-[#ff4444]">
+                               {Math.abs(((processedData.calcLambda - TRUE_LAMBDA_NM)/TRUE_LAMBDA_NM)*100).toFixed(2)} %
+                            </span>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

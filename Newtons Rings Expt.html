@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Newton's Rings Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .microscope-grid {
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        function App() {
+          // --- CONSTANTS & PHYSICS ---
+          const TRUE_LAMBDA_NM = 589.3; // Sodium light wavelength in nm
+          const TRUE_LAMBDA_MM = TRUE_LAMBDA_NM * 1e-6; // in mm
+          const RADIUS_LENS_MM = 1000; // Radius of curvature R = 1m = 1000mm
+          const SCALE_PX_PER_MM = 35; // Visual scaling for the microscope SVG
+          
+          // --- STATE ---
+          const [micrometer, setMicrometer] = useState(10.000); // Centered at 10mm
+          const [activeRing, setActiveRing] = useState(20);
+          const [data, setData] = useState([
+              { n: 20, left: null, right: null },
+              { n: 15, left: null, right: null },
+              { n: 10, left: null, right: null },
+              { n: 5,  left: null, right: null }
+          ]);
+
+          // --- HANDLERS ---
+          const handleMicrometerChange = (e) => setMicrometer(parseFloat(e.target.value));
+          
+          const adjustMicrometer = (delta) => {
+              let newVal = micrometer + delta;
+              if(newVal > 15) newVal = 15;
+              if(newVal < 5) newVal = 5;
+              setMicrometer(parseFloat(newVal.toFixed(3)));
+          };
+
+          const recordReading = (side) => {
+              setData(prevData => prevData.map(row => 
+                  row.n === activeRing ? { ...row, [side]: micrometer } : row
+              ));
+          };
+
+          const clearAll = () => {
+              setData(data.map(row => ({ ...row, left: null, right: null })));
+              setMicrometer(10.000);
+          };
+
+          // --- CALCULATIONS FOR TABLE & GRAPH ---
+          const processedData = useMemo(() => {
+              let validPoints = [];
+              const enhanced = data.map(row => {
+                  let D = null;
+                  let D2 = null;
+                  if (row.left !== null && row.right !== null) {
+                      D = Math.abs(row.left - row.right);
+                      D2 = D * D;
+                      validPoints.push({ n: row.n, D2 });
+                  }
+                  return { ...row, D, D2 };
+              });
+
+              // Linear Regression (D^2 vs n) -> y = mx
+              let slope = null;
+              let calcLambda = null;
+              if (validPoints.length >= 2) {
+                  let sumN = 0, sumD2 = 0, sumND2 = 0, sumN2 = 0;
+                  const count = validPoints.length;
+                  validPoints.forEach(p => {
+                      sumN += p.n;
+                      sumD2 += p.D2;
+                      sumND2 += p.n * p.D2;
+                      sumN2 += p.n * p.n;
+                  });
+                  const denominator = (count * sumN2 - sumN * sumN);
+                  if (denominator !== 0) {
+                      slope = (count * sumND2 - sumN * sumD2) / denominator;
+                      // lambda = slope / 4R. (slope is in mm^2). R = 1000mm.
+                      // lambda_mm = slope / 4000. lambda_nm = slope / 4000 * 1e6
+                      calcLambda = (slope / (4 * RADIUS_LENS_MM)) * 1e6;
+                  }
+              }
+
+              return { rows: enhanced, validPoints, slope, calcLambda };
+          }, [data]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          // Generate Fringe Pattern dynamically
+          const generateFringes = () => {
+              const fringes = [];
+              const lambdaR = TRUE_LAMBDA_MM * RADIUS_LENS_MM; // ~0.5893
+              
+              // Dark central spot
+              fringes.push(<circle key="center" cx="0" cy="0" r={Math.sqrt(0.3 * lambdaR) * SCALE_PX_PER_MM} fill="#0a0a0a" opacity="0.95" />);
+              
+              // Draw 30 rings
+              for (let n = 1; n <= 30; n++) {
+                  const r_mm = Math.sqrt(n * lambdaR);
+                  const r_px = r_mm * SCALE_PX_PER_MM;
+                  // Fringe width decreases as n increases -> roughly dr/dn
+                  const strokeW = (lambdaR / (2 * r_mm)) * SCALE_PX_PER_MM * 0.9;
+                  
+                  fringes.push(
+                      <circle 
+                        key={n} 
+                        cx="0" 
+                        cy="0" 
+                        r={r_px} 
+                        fill="none" 
+                        stroke="#0a0a0a" 
+                        strokeWidth={Math.max(1.5, strokeW)} 
+                        opacity="0.9"
+                      />
+                  );
+              }
+              return fringes;
+          };
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Newton's Rings</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">Interference<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    <Section title="1. Aim">
+                      To determine the wavelength of monochromatic light using Newton’s Rings.
+                    </Section>
+                    
+                    <Section title="2. Apparatus">
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li><strong>Monochromatic Light Source:</strong> Sodium Lamp.</li>
+                        <li><strong>Plano-Convex Lens:</strong> Large radius of curvature (R).</li>
+                        <li><strong>Optically Flat Glass Plate.</strong></li>
+                        <li><strong>Traveling Microscope:</strong> To measure ring diameters.</li>
+                        <li><strong>Glass Slide:</strong> Placed at 45&deg; to reflect light downwards.</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="3. Formula">
+                      <p>The wavelength (&lambda;) is calculated using the formula:</p>
+                      <div className="text-center my-3 text-[#e1f26c] font-mono text-xl">
+                        &lambda; = (D<sub className="text-xs">n+m</sub>² - D<sub className="text-xs">n</sub>²) / 4mR
+                      </div>
+                      <ul className="list-disc pl-5 space-y-1 text-xs">
+                        <li><strong>D<sub className="text-[9px]">n</sub>:</strong> Diameter of the n<sup className="text-[9px]">th</sup> dark ring.</li>
+                        <li><strong>D<sub className="text-[9px]">n+m</sub>:</strong> Diameter of the (n+m)<sup className="text-[9px]">th</sup> dark ring.</li>
+                        <li><strong>m:</strong> Number of rings between measurements.</li>
+                        <li><strong>R:</strong> Radius of curvature of the plano-convex lens.</li>
+                      </ul>
+                    </Section>
+                    
+                    <Section title="4. Procedure">
+                      <ol className="list-decimal pl-5 space-y-2">
+                        <li><strong>Focusing:</strong> Adjust the traveling microscope to see a clear pattern of concentric rings with a <strong>dark center</strong>.</li>
+                        <li><strong>Measurement:</strong> Move the microscope to the left and count to the n<sup className="text-[9px]">th</sup> dark ring (e.g., 20).</li>
+                        <li>Record the micrometer position. Move back toward the center, recording positions for every 5 rings.</li>
+                        <li>Cross the center and repeat the measurements for the same rings on the right side.</li>
+                        <li><strong>Diameter:</strong> The diameter D is the difference between the left and right positions.</li>
+                      </ol>
+                    </Section>
+
+                    <div className="mt-4 p-4 rounded-xl border border-dashed border-[#e1f26c]/50 bg-[#e1f26c]/5">
+                        <h3 className="text-[#e1f26c] font-bold text-sm mb-1">Why is the center dark?</h3>
+                        <p className="text-xs text-gray-300">
+                            At the point of contact, the air film thickness is zero, but a phase change of &pi; occurs upon reflection at the lower glass surface, leading to destructive interference.
+                        </p>
+                    </div>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-0 relative border-b border-gray-800 bg-[#111] overflow-hidden microscope-grid">
+                       
+                       {/* Overhead Light Glow */}
+                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-3/4 h-3/4 bg-[#fde047] rounded-full blur-[100px] opacity-10 pointer-events-none"></div>
+
+                       {/* Traveling Microscope Viewport */}
+                       <div className="w-[85%] max-w-[350px] aspect-square bg-[#fde047] rounded-full border-[12px] border-[#222] shadow-[0_0_30px_rgba(253,224,71,0.2)] relative overflow-hidden flex items-center justify-center">
+                           
+                           {/* SVG Ring Pattern. 
+                               Center is at 10.000 mm. 
+                               Translation moves the *rings* in the opposite direction to simulate moving the microscope crosshair over them. */}
+                           <svg viewBox="-200 -200 400 400" className="w-full h-full opacity-90 drop-shadow-md">
+                               <g style={{ transform: `translateX(${(10.000 - micrometer) * SCALE_PX_PER_MM}px)`, transition: 'transform 0.05s linear' }}>
+                                   {generateFringes()}
+                               </g>
+                           </svg>
+
+                           {/* Fixed Microscope Crosshair */}
+                           <div className="absolute top-0 bottom-0 left-1/2 w-[1.5px] bg-[#ff4444] shadow-[0_0_5px_#ff4444] -translate-x-1/2 pointer-events-none z-10"></div>
+                           <div className="absolute left-0 right-0 top-1/2 h-[1.5px] bg-[#ff4444] shadow-[0_0_5px_#ff4444] -translate-y-1/2 pointer-events-none z-10"></div>
+                           
+                           <div className="absolute bottom-6 right-1/2 translate-x-1/2 text-[10px] text-gray-800 font-bold bg-[#fde047]/80 px-2 rounded-full border border-gray-800">
+                             EYEPIECE FOV
+                           </div>
+                       </div>
+
+                       {/* Mini Apparatus Schematic (Bottom Right Corner) */}
+                       <div className="absolute bottom-2 right-2 w-24 h-24 bg-black/60 rounded border border-gray-700 p-2 backdrop-blur flex flex-col items-center justify-end">
+                          <div className="w-12 h-1 bg-blue-300/30 mb-1"></div> {/* Glass Plate */}
+                          <div className="w-12 h-3 bg-blue-300/40 rounded-b-full mb-2"></div> {/* Plano-Convex Lens */}
+                          <div className="w-[1px] h-8 bg-[#fde047] absolute top-2 left-1/2"></div> {/* Light Ray */}
+                          <div className="w-10 h-[1px] bg-white/50 rotate-45 absolute top-6 left-7"></div> {/* 45deg Glass */}
+                          <span className="text-[8px] text-gray-500 absolute top-1 left-1">Apparatus</span>
+                       </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {/* Main Micrometer Display */}
+                      <div className="bg-[#050505] border-2 border-[#111] p-3 rounded-lg text-center shadow-inner relative overflow-hidden">
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#e1f26c]"></div>
+                        <span className="text-[10px] uppercase text-gray-500 tracking-widest">Micrometer Reading (M.S.R + V.S.R)</span>
+                        <div className="font-mono text-3xl md:text-4xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                            {micrometer.toFixed(3)} <span className="text-sm text-gray-400">mm</span>
+                        </div>
+                      </div>
+
+                      {/* Rotation Controls */}
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                          <span>Left (5mm)</span>
+                          <span className="text-white">Microscope Position</span>
+                          <span>Right (15mm)</span>
+                        </div>
+                        <input 
+                          type="range" min="5" max="15" step="0.001" value={micrometer} onChange={handleMicrometerChange}
+                          className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                          style={{ background: `linear-gradient(to right, #01998e 0%, #e1f26c ${((micrometer-5)/10)*100}%, #333 ${((micrometer-5)/10)*100}%, #333 100%)` }}
+                        />
+                        
+                        {/* Fine Tuning Controls */}
+                        <div className="flex justify-between items-center gap-1 sm:gap-2">
+                           <button onClick={() => adjustMicrometer(-0.1)} className="px-2 py-1.5 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">&laquo; -0.1</button>
+                           <button onClick={() => adjustMicrometer(-0.001)} className="px-2 py-1.5 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95 text-[#e1f26c] border border-gray-700 font-mono">&lsaquo; -0.001</button>
+                           <span className="text-[10px] text-gray-500 uppercase tracking-wider hidden sm:block">Fine Tune (mm)</span>
+                           <button onClick={() => adjustMicrometer(0.001)} className="px-2 py-1.5 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95 text-[#e1f26c] border border-gray-700 font-mono">+0.001 &rsaquo;</button>
+                           <button onClick={() => adjustMicrometer(0.1)} className="px-2 py-1.5 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95 text-[#01998e] border border-gray-700 font-mono">+0.1 &raquo;</button>
+                        </div>
+                      </div>
+
+                      {/* Recording Controls */}
+                      <div className="grid grid-cols-3 gap-2 mt-2 bg-[#111] p-2 rounded-lg border border-gray-800">
+                        
+                        {/* Ring Selector */}
+                        <div className="col-span-1 flex flex-col justify-center">
+                            <label className="text-[9px] text-gray-400 uppercase tracking-wider mb-1">Target Ring (n)</label>
+                            <select 
+                                className="bg-[#222] border border-gray-600 text-white text-sm rounded py-1 px-2 font-mono outline-none focus:border-[#e1f26c]"
+                                value={activeRing}
+                                onChange={(e) => setActiveRing(parseInt(e.target.value))}
+                            >
+                                <option value="20">n = 20</option>
+                                <option value="15">n = 15</option>
+                                <option value="10">n = 10</option>
+                                <option value="5">n = 5</option>
+                            </select>
+                        </div>
+
+                        {/* Record Buttons */}
+                        <div className="col-span-2 flex gap-2">
+                            <button 
+                              onClick={() => recordReading('left')}
+                              className="flex-1 py-1 bg-transparent hover:bg-[#01998e]/20 border border-[#01998e] text-[#01998e] text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Record Left
+                            </button>
+                            <button 
+                              onClick={() => recordReading('right')}
+                              className="flex-1 py-1 bg-transparent hover:bg-[#e1f26c]/20 border border-[#e1f26c] text-[#e1f26c] text-xs font-bold rounded transition-all active:scale-95"
+                            >
+                              Record Right
+                            </button>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={clearAll}
+                        className="w-full mt-1 py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-[10px] uppercase tracking-widest font-bold rounded transition-all active:scale-95"
+                      >
+                        Reset Table Data
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    <Section title="5. Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Ring (n)</th>
+                              <th className="px-1 py-2">Left (mm)</th>
+                              <th className="px-1 py-2">Right (mm)</th>
+                              <th className="px-1 py-2">D (mm)</th>
+                              <th className="px-1 py-2">D² (mm²)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {processedData.rows.map((row, i) => (
+                                <tr key={row.n} className={`border-b border-gray-800 ${row.n === activeRing ? 'bg-white/10' : 'hover:bg-white/5'}`}>
+                                    <td className="px-1 py-2 font-bold text-white border-r border-gray-800 bg-[#050505]">{row.n}</td>
+                                    <td className="px-1 py-2 text-[#01998e]">{row.left !== null ? row.left.toFixed(3) : '---'}</td>
+                                    <td className="px-1 py-2 text-[#e1f26c] border-r border-gray-800">{row.right !== null ? row.right.toFixed(3) : '---'}</td>
+                                    <td className="px-1 py-2 text-gray-300">{row.D !== null ? row.D.toFixed(3) : '---'}</td>
+                                    <td className="px-1 py-2 font-bold text-white bg-black/40">{row.D2 !== null ? row.D2.toFixed(3) : '---'}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Section>
+
+                    <Section title="6. Graph (D² vs n)">
+                      <div className="w-full aspect-video bg-[#0a0a0a] rounded-lg border border-gray-800 relative flex items-center justify-center">
+                        {processedData.validPoints.length < 2 ? (
+                            <span className="text-gray-600 text-xs italic">Record at least 2 full rings to generate graph.</span>
+                        ) : (
+                            <svg viewBox="0 0 100 100" className="w-full h-full p-2 overflow-visible" preserveAspectRatio="none">
+                              {/* Axes */}
+                              <line x1="10" y1="90" x2="95" y2="90" stroke="gray" strokeWidth="1"/>
+                              <line x1="10" y1="90" x2="10" y2="5" stroke="gray" strokeWidth="1"/>
+                              <text x="50" y="98" fill="gray" fontSize="4" textAnchor="middle">Ring Number (n)</text>
+                              <text x="2" y="50" fill="gray" fontSize="4" textAnchor="middle" transform="rotate(-90 2 50)">Square of Diameter D² (mm²)</text>
+                              
+                              {/* Grid Lines */}
+                              {[25, 50, 75].map(x => <line key={`vx${x}`} x1={10 + (x/25)*85} y1="90" x2={10 + (x/25)*85} y2="5" stroke="#333" strokeWidth="0.5" strokeDasharray="1,2"/>)}
+                              {[20, 40, 60, 80].map(y => <line key={`hy${y}`} x1="10" y1={y} x2="95" y2={y} stroke="#333" strokeWidth="0.5" strokeDasharray="1,2"/>)}
+
+                              {/* Best Fit Line */}
+                              {processedData.slope !== null && (
+                                 <line 
+                                   x1={10 + (0/25)*85} 
+                                   y1={90 - (0/60)*85} 
+                                   x2={10 + (25/25)*85} 
+                                   y2={90 - ((processedData.slope * 25)/60)*85} 
+                                   stroke="#01998e" 
+                                   strokeWidth="1.5" 
+                                   strokeDasharray="2,2"
+                                 />
+                              )}
+
+                              {/* Data Points */}
+                              {processedData.validPoints.map((pt, i) => {
+                                // Scale logic: X (0-25) maps to (10-95), Y (0-60) maps to (90-5)
+                                const cx = 10 + (pt.n / 25) * 85;
+                                const cy = 90 - (pt.D2 / 60) * 85;
+                                return (
+                                  <circle key={i} cx={cx} cy={cy} r="2" fill="#e1f26c" className="drop-shadow-[0_0_3px_#e1f26c]" />
+                                )
+                              })}
+                            </svg>
+                        )}
+                      </div>
+                      <div className="mt-3 flex justify-between text-xs text-gray-400 font-mono">
+                        <span>Slope (m): {processedData.slope ? processedData.slope.toFixed(4) : "0.0000"} mm²/ring</span>
+                      </div>
+                    </Section>
+
+                    {processedData.calcLambda !== null && (
+                      <Section title="7. Result">
+                        <div className="space-y-4 font-mono text-sm bg-black/40 p-4 rounded-lg border border-gray-800 relative overflow-hidden">
+                          <div className="absolute right-0 top-0 w-1 h-full bg-[#01998e]"></div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Lens Radius (R):</span>
+                            <span className="text-white">{RADIUS_LENS_MM} mm</span>
+                          </div>
+                          
+                          <div className="flex justify-between items-center border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Calculated &lambda;:</span>
+                            <span className="text-2xl font-bold text-[#e1f26c] drop-shadow-[0_0_8px_rgba(225,242,108,0.5)]">
+                               {processedData.calcLambda.toFixed(1)} nm
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-center pt-1 text-xs">
+                            <span className="text-gray-500">True &lambda; (Sodium):</span>
+                            <span className="text-gray-400">589.3 nm</span>
+                          </div>
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="text-gray-500">Error:</span>
+                            <span className="text-[#ff4444]">
+                               {Math.abs(((processedData.calcLambda - TRUE_LAMBDA_NM)/TRUE_LAMBDA_NM)*100).toFixed(2)} %
+                            </span>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

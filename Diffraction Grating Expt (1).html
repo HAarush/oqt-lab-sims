@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diffraction Grating Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        function App() {
+          // --- CONSTANTS ---
+          const LPI = 15000;
+          const LINES_PER_METER = LPI / 0.0254;
+          const GRATING_ELEMENT = 1 / LINES_PER_METER; // ~1.6933e-6 m
+          
+          // Theoretical Wavelengths (nm)
+          const TRUE_VIOLET = 435.8;
+          const TRUE_GREEN = 546.1;
+          const TRUE_Y1 = 577.0;
+          const TRUE_Y2 = 579.0;
+
+          // Calculate Theoretical Angles (First Order, m=1)
+          const calcAngle = (lambda) => (Math.asin((lambda * 1e-9) / GRATING_ELEMENT) * 180) / Math.PI;
+          
+          const LINES = [
+            { name: 'Violet', color: '#8a2be2', angle: calcAngle(TRUE_VIOLET) }, // ~14.9°
+            { name: 'Green', color: '#00ff00', angle: calcAngle(TRUE_GREEN) },   // ~18.8°
+            { name: 'Yellow 1', color: '#fde047', angle: calcAngle(TRUE_Y1) },   // ~19.92°
+            { name: 'Yellow 2', color: '#eab308', angle: calcAngle(TRUE_Y2) },   // ~19.99°
+          ];
+
+          // --- STATE ---
+          const [angle, setAngle] = useState(0.00); // Telescope angle (-25 to 25)
+          const [readings, setReadings] = useState({
+             Y1_Left: null, Y1_Right: null,
+             Y2_Left: null, Y2_Right: null
+          });
+
+          // --- HANDLERS ---
+          const handleAngleChange = (e) => setAngle(parseFloat(e.target.value));
+          
+          const adjustAngle = (delta) => {
+              let newAngle = angle + delta;
+              if(newAngle > 25) newAngle = 25;
+              if(newAngle < -25) newAngle = -25;
+              setAngle(parseFloat(newAngle.toFixed(2)));
+          };
+
+          // Convert internal -25 to +25 angle to circular Vernier readings (0-360)
+          const getVernierReadings = (currentAngle) => {
+              let v1 = currentAngle;
+              if (v1 < 0) v1 += 360;
+              let v2 = (v1 + 180) % 360;
+              return { V1: v1, V2: v2 };
+          };
+
+          const recordReading = (targetLine, side) => {
+              const { V1, V2 } = getVernierReadings(angle);
+              setReadings(prev => ({
+                  ...prev,
+                  [`${targetLine}_${side}`]: { V1, V2, rawAngle: angle }
+              }));
+          };
+
+          const clearReadings = () => {
+              setReadings({ Y1_Left: null, Y1_Right: null, Y2_Left: null, Y2_Right: null });
+          };
+
+          // --- CALCULATIONS FOR TABLE ---
+          const calcResults = useMemo(() => {
+              const calculateLineResult = (left, right) => {
+                  if (!left || !right) return null;
+                  
+                  // Calculate 2 Theta for V1
+                  let diffV1 = left.V1 - right.V1;
+                  if (diffV1 > 180) diffV1 = 360 - diffV1; // Handle 0-cross
+                  if (diffV1 < 0) diffV1 = Math.abs(diffV1);
+                  
+                  // Calculate 2 Theta for V2
+                  let diffV2 = left.V2 - right.V2;
+                  if (diffV2 > 180) diffV2 = 360 - diffV2; // Handle 0-cross
+                  if (diffV2 < 0) diffV2 = Math.abs(diffV2);
+
+                  const thetaV1 = diffV1 / 2;
+                  const thetaV2 = diffV2 / 2;
+                  const meanTheta = (thetaV1 + thetaV2) / 2;
+                  
+                  // Wavelength calculation: lambda = (e+d) * sin(theta)
+                  const wavelength = GRATING_ELEMENT * Math.sin((meanTheta * Math.PI) / 180) * 1e9; // in nm
+                  
+                  return { 
+                      diffV1: diffV1.toFixed(2), diffV2: diffV2.toFixed(2), 
+                      thetaV1: thetaV1.toFixed(2), thetaV2: thetaV2.toFixed(2), 
+                      meanTheta: meanTheta.toFixed(2), 
+                      wavelength: wavelength.toFixed(1) 
+                  };
+              };
+
+              const Y1_Res = calculateLineResult(readings.Y1_Left, readings.Y1_Right);
+              const Y2_Res = calculateLineResult(readings.Y2_Left, readings.Y2_Right);
+
+              return { Y1: Y1_Res, Y2: Y2_Res };
+          }, [readings]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          // Get current vernier for display
+          const currentVernier = getVernierReadings(angle);
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Diffraction Grating</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">Spectrometer<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    <Section title="1. Aim">
+                      To determine the wavelengths of the Yellow 1 and Yellow 2 lines of the Mercury spectrum using a plane transmission grating (15,000 LPI) in the normal incidence position.
+                    </Section>
+                    
+                    <Section title="2. Apparatus">
+                      <ul className="list-disc pl-5 space-y-1">
+                        <li><strong>Spectrometer:</strong> To measure precise angular positions.</li>
+                        <li><strong>Diffraction Grating:</strong> 15,000 Lines Per Inch (LPI).</li>
+                        <li><strong>Light Source:</strong> Mercury vapor lamp (provides the doublet).</li>
+                        <li><strong>Spirit Level:</strong> To ensure the table is perfectly horizontal.</li>
+                        <li><strong>Reading Lens:</strong> To view the fine markings on the Vernier scales.</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="3. Formula">
+                      <p>The wavelength is calculated using the grating equation for the first order (m=1):</p>
+                      <div className="text-center my-3 text-[#e1f26c] font-mono text-xl">
+                        &lambda; = (e + d) &times; sin(&theta;)
+                      </div>
+                      <ul className="list-disc pl-5 space-y-1 text-xs">
+                        <li><strong>(e + d) (Grating Element):</strong> The distance between two consecutive lines. For 15k LPI, it is ~1.693 &times; 10⁻⁶ m.</li>
+                        <li><strong>&theta;:</strong> The angle of diffraction for the specific line.</li>
+                      </ul>
+                    </Section>
+                    
+                    <Section title="4. Procedure">
+                      <ol className="list-decimal pl-5 space-y-2">
+                        <li><strong>Alignment:</strong> Ensure the grating is in the normal incidence position.</li>
+                        <li><strong>Taking Readings:</strong> Turn the telescope to the left to find the first-order yellow doublet (around 19.9°).</li>
+                        <li>Align the crosshair on <strong>Yellow 1</strong> (inner/shorter wavelength) and record left readings.</li>
+                        <li>Align on <strong>Yellow 2</strong> (outer/longer wavelength) and record left readings.</li>
+                        <li>Repeat on the right side of the direct image (around -19.9°).</li>
+                        <li><strong>Calculation:</strong> Difference between left and right readings gives 2&theta;. Divide by 2 to find &theta;.</li>
+                      </ol>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-2 min-h-[350px] relative border-b border-gray-800">
+                       
+                       {/* 1. Telescope Eyepiece View (High precision) */}
+                       <div className="w-[80%] aspect-video bg-black rounded-full border-4 border-[#333] shadow-[0_0_20px_rgba(255,255,255,0.1)] relative overflow-hidden mb-4">
+                           {/* Eyepiece FOV background glow */}
+                           <div className="absolute inset-0 bg-radial-gradient from-white/5 to-transparent"></div>
+                           
+                           {/* Render spectral lines dynamically based on telescope angle */}
+                           {/* FOV is roughly 1.5 degrees wide. Scale: 1.5 deg = 100% width */}
+                           {LINES.map((line, idx) => {
+                               // Calculate position for Right Side (+ angle)
+                               const posRight = 50 + ((line.angle - angle) / 0.75) * 50;
+                               // Calculate position for Left Side (- angle)
+                               const posLeft = 50 + ((-line.angle - angle) / 0.75) * 50;
+                               
+                               return (
+                                   <React.Fragment key={idx}>
+                                       {/* Draw line if it falls within FOV on the Right side */}
+                                       {posRight > -10 && posRight < 110 && (
+                                           <div 
+                                             className="absolute top-0 bottom-0 w-1 sm:w-2 shadow-[0_0_10px_currentColor]"
+                                             style={{ left: `${posRight}%`, backgroundColor: line.color, color: line.color, opacity: 0.8 }}
+                                           ></div>
+                                       )}
+                                       {/* Draw line if it falls within FOV on the Left side */}
+                                       {posLeft > -10 && posLeft < 110 && (
+                                           <div 
+                                             className="absolute top-0 bottom-0 w-1 sm:w-2 shadow-[0_0_10px_currentColor]"
+                                             style={{ left: `${posLeft}%`, backgroundColor: line.color, color: line.color, opacity: 0.8 }}
+                                           ></div>
+                                       )}
+                                   </React.Fragment>
+                               );
+                           })}
+
+                           {/* Central Image (White Light Slit) at 0 degrees */}
+                           {Math.abs(angle) < 0.75 && (
+                               <div 
+                                 className="absolute top-0 bottom-0 w-2 bg-white shadow-[0_0_15px_#fff]"
+                                 style={{ left: `${50 + ((0 - angle) / 0.75) * 50}%` }}
+                               ></div>
+                           )}
+
+                           {/* Eyepiece Crosshair */}
+                           <div className="absolute top-0 bottom-0 left-1/2 w-[1px] bg-white/70 -translate-x-1/2"></div>
+                           <div className="absolute left-0 right-0 top-1/2 h-[1px] bg-white/70 -translate-y-1/2"></div>
+                           
+                           <div className="absolute bottom-2 right-4 text-xs text-gray-500 font-mono tracking-widest bg-black/50 px-2 rounded">TELESCOPE VIEW</div>
+                       </div>
+
+                       {/* 2. Top-Down Spectrometer View */}
+                       <svg width="180" height="180" viewBox="-100 -100 200 200" className="drop-shadow-[0_0_15px_rgba(234,179,8,0.2)]">
+                         {/* Base Table */}
+                         <circle cx="0" cy="0" r="80" fill="#111" stroke="#444" strokeWidth="2" />
+                         <circle cx="0" cy="0" r="70" fill="#1a1a1a" stroke="#555" strokeWidth="1" strokeDasharray="2,2" />
+                         
+                         {/* Grating in Center */}
+                         <rect x="-15" y="-3" width="30" height="6" fill="#888" transform="rotate(0)" />
+                         <line x1="-15" y1="-3" x2="15" y2="-3" stroke="#fde047" strokeWidth="1" />
+                         
+                         {/* Collimator (Fixed at 180 deg / Bottom) */}
+                         <g transform="translate(0, 80)">
+                           <rect x="-10" y="0" width="20" height="40" fill="#222" stroke="#666" strokeWidth="2" />
+                           <path d="M-5 40 L5 40 L5 45 L-5 45 Z" fill="#fde047" /> {/* Light Source */}
+                           <line x1="0" y1="0" x2="0" y2="-80" stroke="#fde047" strokeWidth="2" strokeDasharray="4,2" opacity="0.6" /> {/* Direct Ray */}
+                         </g>
+
+                         {/* Telescope (Rotates based on angle) */}
+                         {/* Note: In SVG, +angle rotates clockwise. Angle 0 is straight up. Collimator is at bottom. */}
+                         <g style={{ transform: `rotate(${angle}deg)`, transition: 'transform 0.1s linear' }}>
+                           <rect x="-8" y="-120" width="16" height="40" fill="#333" stroke="#01998e" strokeWidth="2" />
+                           <circle cx="0" cy="-120" r="6" fill="#111" stroke="#01998e" />
+                           <line x1="0" y1="0" x2="0" y2="-80" stroke="#fde047" strokeWidth="1" opacity="0.4" /> {/* View Ray */}
+                         </g>
+
+                         {/* Direct Ray passing through */}
+                         <line x1="0" y1="0" x2="0" y2="-100" stroke="#fde047" strokeWidth="2" strokeDasharray="4,2" opacity="0.3" />
+                       </svg>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {/* Live Vernier Displays */}
+                      <div className="flex gap-4 justify-between">
+                        <div className="flex-1 bg-[#050505] border border-[#222] p-2 rounded-lg text-center shadow-inner">
+                          <span className="text-[10px] uppercase text-gray-500">Vernier 1 (V₁)</span>
+                          <div className="font-mono text-xl text-[#e1f26c]">{currentVernier.V1.toFixed(2)}&deg;</div>
+                        </div>
+                        <div className="flex-1 bg-[#050505] border border-[#222] p-2 rounded-lg text-center shadow-inner">
+                          <span className="text-[10px] uppercase text-gray-500">Vernier 2 (V₂)</span>
+                          <div className="font-mono text-xl text-[#01998e]">{currentVernier.V2.toFixed(2)}&deg;</div>
+                        </div>
+                      </div>
+
+                      {/* Rotation Controls */}
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase">
+                          <span>Left (-25&deg;)</span>
+                          <span className="text-white">Telescope Rotation</span>
+                          <span>Right (+25&deg;)</span>
+                        </div>
+                        <input 
+                          type="range" min="-25" max="25" step="0.1" value={angle} onChange={handleAngleChange}
+                          className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                          style={{ background: `linear-gradient(to right, #01998e 0%, #e1f26c ${((angle+25)/50)*100}%, #333 ${((angle+25)/50)*100}%, #333 100%)` }}
+                        />
+                        
+                        {/* Fine Tuning Controls */}
+                        <div className="flex justify-between items-center gap-2">
+                           <button onClick={() => adjustAngle(-0.1)} className="px-2 py-1 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95">&laquo; -0.1&deg;</button>
+                           <button onClick={() => adjustAngle(-0.01)} className="px-2 py-1 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95">&lsaquo; -0.01&deg;</button>
+                           <span className="text-xs text-gray-500 uppercase tracking-wider">Fine Tune</span>
+                           <button onClick={() => adjustAngle(0.01)} className="px-2 py-1 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95">+0.01&deg; &rsaquo;</button>
+                           <button onClick={() => adjustAngle(0.1)} className="px-2 py-1 bg-gray-800 text-xs rounded hover:bg-gray-700 active:scale-95">+0.1&deg; &raquo;</button>
+                        </div>
+                      </div>
+
+                      {/* Recording Buttons */}
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div className="text-[10px] col-span-2 text-center text-gray-400 uppercase tracking-widest border-b border-gray-800 pb-1 mb-1">Record Reading</div>
+                        
+                        {/* Left Side Buttons (Negative Angles) */}
+                        <div className="flex flex-col gap-2 border-r border-gray-800 pr-2">
+                          <button 
+                            onClick={() => recordReading('Y1', 'Left')}
+                            className="py-2 bg-[#fde047]/10 hover:bg-[#fde047]/30 border border-[#fde047] text-[#fde047] text-xs font-bold rounded transition-all active:scale-95"
+                          >
+                            Y1 (Inner) - Left Side
+                          </button>
+                          <button 
+                            onClick={() => recordReading('Y2', 'Left')}
+                            className="py-2 bg-[#eab308]/10 hover:bg-[#eab308]/30 border border-[#eab308] text-[#eab308] text-xs font-bold rounded transition-all active:scale-95"
+                          >
+                            Y2 (Outer) - Left Side
+                          </button>
+                        </div>
+
+                        {/* Right Side Buttons (Positive Angles) */}
+                        <div className="flex flex-col gap-2 pl-2">
+                          <button 
+                            onClick={() => recordReading('Y1', 'Right')}
+                            className="py-2 bg-[#fde047]/10 hover:bg-[#fde047]/30 border border-[#fde047] text-[#fde047] text-xs font-bold rounded transition-all active:scale-95"
+                          >
+                            Y1 (Inner) - Right Side
+                          </button>
+                          <button 
+                            onClick={() => recordReading('Y2', 'Right')}
+                            className="py-2 bg-[#eab308]/10 hover:bg-[#eab308]/30 border border-[#eab308] text-[#eab308] text-xs font-bold rounded transition-all active:scale-95"
+                          >
+                            Y2 (Outer) - Right Side
+                          </button>
+                        </div>
+                        
+                        <button 
+                          onClick={clearReadings}
+                          className="col-span-2 mt-2 py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                        >
+                          Clear All Readings
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    <Section title="5. Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30">
+                        <table className="w-full text-[10px] sm:text-xs text-center">
+                          <thead className="uppercase bg-[#01998e]/20 text-white">
+                            <tr>
+                              <th className="px-1 py-2">Line</th>
+                              <th className="px-1 py-2">Scale</th>
+                              <th className="px-1 py-2">Left Rdg</th>
+                              <th className="px-1 py-2">Right Rdg</th>
+                              <th className="px-1 py-2">2&theta; = |L-R|</th>
+                              <th className="px-1 py-2">&theta; = 2&theta;/2</th>
+                              <th className="px-1 py-2">Mean &theta;</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {/* YELLOW 1 ROW V1 */}
+                            <tr className="border-b border-gray-800 bg-[#fde047]/5">
+                              <td rowSpan="2" className="px-1 py-2 font-bold text-[#fde047] border-r border-gray-800">Y1</td>
+                              <td className="px-1 py-2 text-gray-400 border-r border-gray-800">V₁</td>
+                              <td className="px-1 py-2 text-[#fde047]">{readings.Y1_Left ? readings.Y1_Left.V1.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-[#fde047] border-r border-gray-800">{readings.Y1_Right ? readings.Y1_Right.V1.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-white">{calcResults.Y1 ? calcResults.Y1.diffV1 : '-'}</td>
+                              <td className="px-1 py-2 text-white border-r border-gray-800">{calcResults.Y1 ? calcResults.Y1.thetaV1 : '-'}</td>
+                              <td rowSpan="2" className="px-1 py-2 font-bold text-[#fde047] bg-black/40">{calcResults.Y1 ? calcResults.Y1.meanTheta + '°' : '-'}</td>
+                            </tr>
+                            {/* YELLOW 1 ROW V2 */}
+                            <tr className="border-b-2 border-[#eab308]/30 bg-[#fde047]/5">
+                              <td className="px-1 py-2 text-gray-400 border-r border-gray-800">V₂</td>
+                              <td className="px-1 py-2 text-[#fde047]">{readings.Y1_Left ? readings.Y1_Left.V2.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-[#fde047] border-r border-gray-800">{readings.Y1_Right ? readings.Y1_Right.V2.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-white">{calcResults.Y1 ? calcResults.Y1.diffV2 : '-'}</td>
+                              <td className="px-1 py-2 text-white border-r border-gray-800">{calcResults.Y1 ? calcResults.Y1.thetaV2 : '-'}</td>
+                            </tr>
+
+                            {/* YELLOW 2 ROW V1 */}
+                            <tr className="border-b border-gray-800 bg-[#eab308]/5">
+                              <td rowSpan="2" className="px-1 py-2 font-bold text-[#eab308] border-r border-gray-800">Y2</td>
+                              <td className="px-1 py-2 text-gray-400 border-r border-gray-800">V₁</td>
+                              <td className="px-1 py-2 text-[#eab308]">{readings.Y2_Left ? readings.Y2_Left.V1.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-[#eab308] border-r border-gray-800">{readings.Y2_Right ? readings.Y2_Right.V1.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-white">{calcResults.Y2 ? calcResults.Y2.diffV1 : '-'}</td>
+                              <td className="px-1 py-2 text-white border-r border-gray-800">{calcResults.Y2 ? calcResults.Y2.thetaV1 : '-'}</td>
+                              <td rowSpan="2" className="px-1 py-2 font-bold text-[#eab308] bg-black/40">{calcResults.Y2 ? calcResults.Y2.meanTheta + '°' : '-'}</td>
+                            </tr>
+                            {/* YELLOW 2 ROW V2 */}
+                            <tr className="bg-[#eab308]/5">
+                              <td className="px-1 py-2 text-gray-400 border-r border-gray-800">V₂</td>
+                              <td className="px-1 py-2 text-[#eab308]">{readings.Y2_Left ? readings.Y2_Left.V2.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-[#eab308] border-r border-gray-800">{readings.Y2_Right ? readings.Y2_Right.V2.toFixed(2) : '-'}</td>
+                              <td className="px-1 py-2 text-white">{calcResults.Y2 ? calcResults.Y2.diffV2 : '-'}</td>
+                              <td className="px-1 py-2 text-white border-r border-gray-800">{calcResults.Y2 ? calcResults.Y2.thetaV2 : '-'}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="mt-2 text-[10px] text-gray-400 italic text-center">
+                        Note: For V1 on Left side, reading crosses 360&deg; (e.g., 340&deg;). Simulator calculates the internal angle difference automatically.
+                      </div>
+                    </Section>
+
+                    <Section title="6. Result">
+                      <div className="space-y-4 font-mono text-sm bg-black/40 p-4 rounded-lg border border-gray-800">
+                        <div className="flex justify-between items-center border-b border-gray-800 pb-3">
+                          <span className="text-gray-300">Wavelength of Yellow 1 (&lambda;₁):</span>
+                          <span className="text-xl font-bold text-[#fde047]">
+                             {calcResults.Y1 ? calcResults.Y1.wavelength : '---.-'} nm
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center border-b border-gray-800 pb-3">
+                          <span className="text-gray-300">Wavelength of Yellow 2 (&lambda;₂):</span>
+                          <span className="text-xl font-bold text-[#eab308]">
+                             {calcResults.Y2 ? calcResults.Y2.wavelength : '---.-'} nm
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center pt-1">
+                          <span className="text-gray-300">Difference (&Delta;&lambda;):</span>
+                          <span className="text-white font-bold">
+                             {(calcResults.Y1 && calcResults.Y2) ? Math.abs(calcResults.Y2.wavelength - calcResults.Y1.wavelength).toFixed(1) : '-.-'} nm
+                          </span>
+                        </div>
+                        
+                        {(calcResults.Y1 && calcResults.Y2) && (
+                           <div className="mt-4 text-xs text-[#00ff00] text-center uppercase tracking-widest border border-[#00ff00]/30 bg-[#00ff00]/10 py-2 rounded">
+                             Experiment Complete
+                           </div>
+                        )}
+                      </div>
+                    </Section>
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

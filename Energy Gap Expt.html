@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Energy Band Gap Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .lab-grid {
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 25px 25px;
+            background-position: center;
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        function App() {
+          // --- CONSTANTS ---
+          const BOLTZMANN_K = 8.617e-5; // eV/K
+          const EG_TRUE = 0.67; // eV for Germanium
+          const R_REF = 500; // Resistance at high temp ref
+          const T_REF = 373.15; // 100 degrees Celsius in Kelvin
+
+          // --- STATE ---
+          const [tempC, setTempC] = useState(30); // 30 to 100 C
+          const [recordedData, setRecordedData] = useState([]);
+
+          // --- PHYSICS MODEL ---
+          const tempK = tempC + 273.15;
+          const invT = 1 / tempK;
+          const invT0 = 1 / T_REF;
+
+          // R = R0 * exp(Eg / (2kT))
+          // Simplified relation: R = R_ref * exp[(Eg / 2k) * (1/T - 1/T_ref)]
+          const trueResistance = R_REF * Math.exp((EG_TRUE / (2 * BOLTZMANN_K)) * (invT - invT0));
+          
+          // Realistic noise (0.5% variation)
+          const noise = (Math.random() * 0.01 - 0.005) * trueResistance;
+          const displayResistance = trueResistance + noise;
+          const lnR = Math.log(displayResistance);
+          const xVal = 1000 / tempK; // Plotting vs 10^3/T for better scale
+
+          // --- HANDLERS ---
+          const handleRecord = () => {
+            if (recordedData.some(d => d.tempC === tempC)) return;
+            
+            const entry = {
+              tempC: tempC,
+              tempK: parseFloat(tempK.toFixed(2)),
+              x: parseFloat(xVal.toFixed(4)),
+              R: parseFloat(displayResistance.toFixed(1)),
+              lnR: parseFloat(lnR.toFixed(4))
+            };
+            
+            const newData = [...recordedData, entry].sort((a, b) => b.tempC - a.tempC);
+            setRecordedData(newData);
+          };
+
+          const handleClear = () => setRecordedData([]);
+
+          // --- CALCULATION ---
+          const results = useMemo(() => {
+            if (recordedData.length < 3) return null;
+            
+            let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+            const n = recordedData.length;
+            
+            recordedData.forEach(d => {
+              const x = 1 / d.tempK;
+              const y = d.lnR;
+              sumX += x;
+              sumY += y;
+              sumXY += x * y;
+              sumXX += x * x;
+            });
+
+            const denominator = (n * sumXX - sumX * sumX);
+            if (denominator === 0) return null;
+            
+            const slope = (n * sumXY - sumX * sumY) / denominator; // This is Eg / 2k
+            const egCalc = slope * 2 * BOLTZMANN_K;
+            const error = Math.abs((egCalc - EG_TRUE) / EG_TRUE) * 100;
+
+            return { eg: egCalc, error, slope };
+          }, [recordedData]);
+
+          // --- UI COMPONENTS ---
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3 bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e]">{title}</h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e]">Energy Band Gap</h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end text-xs text-right text-gray-400">
+                    Semiconductor Physics<br/>Virtual Lab
+                  </div>
+                </header>
+
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    <Section title="1. Aim">
+                      To determine the energy band gap (E<sub>g</sub>) of a semiconductor (Germanium) by studying the variation of its electrical resistance with temperature.
+                    </Section>
+
+                    <Section title="2. Derivation of Formula">
+                      <p className="mb-2">The resistance (R) of an intrinsic semiconductor decreases exponentially with absolute temperature (T):</p>
+                      <div className="text-center my-3 text-[#e1f26c] font-mono text-sm bg-[#111] p-2 rounded border border-gray-800">
+                        R = R₀ &middot; e<sup>(E<sub>g</sub> / 2kT)</sup>
+                      </div>
+                      <p className="mb-2">To linearize, take natural logarithm (ln) on both sides:</p>
+                      <div className="text-center my-3 text-[#01998e] font-mono text-sm bg-[#111] p-2 rounded border border-gray-800">
+                        ln(R) = ln(R₀) + E<sub>g</sub> / 2kT
+                      </div>
+                      <p className="mb-2 text-xs text-gray-400">
+                        Comparing with y = mx + c:
+                        <br/>&bull; y = ln(R)
+                        <br/>&bull; x = 1/T
+                        <br/>&bull; m = E<sub>g</sub> / 2k
+                      </p>
+                    </Section>
+
+                    <Section title="3. Calculation Steps">
+                      <ol className="list-decimal pl-5 space-y-2 text-xs text-gray-400">
+                        <li><strong>Find Slope (m):</strong> Plot ln(R) vs 1/T. Calculate slope as &Delta;ln(R) / &Delta;(1/T).</li>
+                        <li><strong>Identify k:</strong> Boltzmann Constant k = 8.617 &times; 10⁻⁵ eV/K.</li>
+                        <li><strong>Final Result:</strong> 
+                          <div className="mt-2 text-[#e1f26c] font-bold text-center bg-white/5 p-1 rounded border border-white/10">
+                            E<sub>g</sub> = 2 &middot; k &middot; m
+                          </div>
+                        </li>
+                      </ol>
+                    </Section>
+
+                    <Section title="4. Procedure">
+                      <ol className="list-decimal pl-5 space-y-1 text-xs text-gray-400">
+                        <li>Place the semiconductor in the oil bath.</li>
+                        <li>Heat the oil slowly to 100&deg;C using the slider.</li>
+                        <li>Take readings while the oil is <strong>cooling down</strong>.</li>
+                        <li>Record Temperature and Resistance at regular intervals.</li>
+                      </ol>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    <div className="flex-1 flex flex-col items-center justify-center p-4 relative border-b border-gray-800 bg-[#050505] overflow-hidden lab-grid">
+                        
+                        <svg viewBox="0 0 200 200" className="w-full h-full max-w-[350px]">
+                            <rect x="50" y="160" width="100" height="10" rx="2" fill="#222" stroke="#444" />
+                            <rect x="55" y="158" width="90" height="2" fill="#ff4444" opacity={(tempC - 30) / 70} />
+
+                            <path d="M 65 80 L 65 155 A 5 5 0 0 0 70 160 L 130 160 A 5 5 0 0 0 135 155 L 135 80" fill="none" stroke="#fff" strokeWidth="1.5" opacity="0.4" />
+                            <path d="M 68 90 L 68 155 A 2 2 0 0 0 70 157 L 130 157 A 2 2 0 0 0 132 155 L 132 90 Z" fill="#d4a017" opacity="0.6" />
+
+                            <rect x="75" y="50" width="4" height="90" rx="2" fill="#fff" opacity="0.2" />
+                            <rect x="76" y={140 - ((tempC - 30) / 70) * 70} width="2" height={((tempC - 30) / 70) * 70 + 5} fill="#ff4444" rx="1" />
+                            <circle cx="77" cy="140" r="3" fill="#ff4444" />
+
+                            <g transform="translate(100, 130)">
+                                <rect x="-5" y="-5" width="10" height="10" fill="#111" stroke="#333" />
+                                <rect x="-5" y="-5" width="5" height="10" fill="#444" />
+                                <line x1="-15" y1="0" x2="-5" y2="0" stroke="#888" strokeWidth="0.5" />
+                                <line x1="5" y1="0" x2="15" y2="0" stroke="#888" strokeWidth="0.5" />
+                            </g>
+
+                            <path d="M 85 130 L 30 130 L 30 50" fill="none" stroke="#ff4444" strokeWidth="0.8" strokeDasharray="2,1" />
+                            <path d="M 115 130 L 170 130 L 170 50" fill="none" stroke="#00bfff" strokeWidth="0.8" strokeDasharray="2,1" />
+
+                            {tempC > 90 && (
+                                <g opacity="0.4">
+                                    <circle cx="85" cy="120" r="1" fill="#fff" className="animate-ping" />
+                                    <circle cx="115" cy="135" r="1.5" fill="#fff" className="animate-ping" style={{animationDelay: '0.5s'}} />
+                                </g>
+                            )}
+                        </svg>
+
+                        <div className="absolute top-4 right-4 space-y-2">
+                            <div className="bg-black/80 border border-[#01998e] p-2 rounded backdrop-blur shadow-lg w-32 text-center">
+                                <div className="text-[8px] text-gray-500 uppercase tracking-widest">Resistance (R)</div>
+                                <div className="font-mono text-lg text-[#01998e]">
+                                    {displayResistance > 1000 ? (displayResistance/1000).toFixed(2) + " k" : displayResistance.toFixed(1)} &Omega;
+                                </div>
+                            </div>
+                            <div className="bg-black/80 border border-[#e1f26c] p-2 rounded backdrop-blur shadow-lg w-32 text-center">
+                                <div className="text-[8px] text-gray-500 uppercase tracking-widest">Temperature (T)</div>
+                                <div className="font-mono text-lg text-[#e1f26c]">{tempC.toFixed(1)} &deg;C</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4">
+                      <div>
+                        <div className="flex justify-between text-[10px] text-gray-500 uppercase font-bold mb-2">
+                            <span>30&deg;C</span>
+                            <span className="text-[#e1f26c]">Adjust Oil Temperature</span>
+                            <span>100&deg;C</span>
+                        </div>
+                        <input 
+                            type="range" min="30" max="100" step="1" 
+                            value={tempC} 
+                            onChange={e => setTempC(parseInt(e.target.value))} 
+                            className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer" 
+                            style={{ background: `linear-gradient(to right, #00bfff 0%, #ff4444 ${(tempC - 30)/70 * 100}%, #333 ${(tempC - 30)/70 * 100}%, #333 100%)` }}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button onClick={handleRecord} className="py-2 bg-gradient-to-r from-[#01998e] to-[#017a72] text-white text-xs font-bold rounded shadow-lg active:scale-95">RECORD READING</button>
+                        <button onClick={handleClear} className="py-2 bg-transparent border border-red-500/50 text-red-400 text-xs font-bold rounded active:scale-95">CLEAR DATA</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 custom-scrollbar flex flex-col gap-6">
+                    
+                    <Section title="Plot: ln(R) vs 1000/T">
+                        <div className="w-full aspect-square bg-[#0a0a0a] rounded-lg border border-gray-800 relative p-4">
+                            <svg viewBox="0 0 100 100" className="w-full h-full overflow-visible">
+                                <line x1="10" y1="90" x2="95" y2="90" stroke="#444" strokeWidth="0.5" />
+                                <line x1="10" y1="10" x2="10" y2="90" stroke="#444" strokeWidth="0.5" />
+                                
+                                <text x="50" y="98" fill="#888" fontSize="3.5" textAnchor="middle">1000 / T (K⁻¹)</text>
+                                <text x="2" y="50" fill="#888" fontSize="3.5" textAnchor="middle" transform="rotate(-90 2 50)">ln(R)</text>
+
+                                {[2.7, 2.9, 3.1, 3.3].map(x => (
+                                    <g key={x}>
+                                        <line x1={10 + (x-2.6)/0.8 * 85} y1="90" x2={10 + (x-2.6)/0.8 * 85} y2="88" stroke="#444" strokeWidth="0.5" />
+                                        <text x={10 + (x-2.6)/0.8 * 85} y="94" fill="#666" fontSize="2.5" textAnchor="middle">{x}</text>
+                                    </g>
+                                ))}
+
+                                {recordedData.map((d, i) => {
+                                    const px = 10 + (d.x - 2.6) / 0.8 * 85;
+                                    const py = 90 - (d.lnR - 5) / 5 * 80;
+                                    return (
+                                        <circle key={i} cx={px} cy={py} r="1.5" fill="#e1f26c" className="drop-shadow-[0_0_3px_#e1f26c]" />
+                                    );
+                                })}
+
+                                {results && (
+                                    <line 
+                                        x1="10" 
+                                        y1={90 - ( ( (results.slope/1000 * 2.6 + (recordedData[0].lnR - (results.slope/1000 * recordedData[0].x))) - 5) / 5 * 80)}
+                                        x2="95"
+                                        y2={90 - ( ( (results.slope/1000 * 3.4 + (recordedData[0].lnR - (results.slope/1000 * recordedData[0].x))) - 5) / 5 * 80)}
+                                        stroke="#01998e" strokeWidth="0.5" strokeDasharray="2,2"
+                                    />
+                                )}
+                            </svg>
+                        </div>
+                    </Section>
+
+                    <Section title="Observation Table">
+                        <div className="overflow-x-auto rounded-lg border border-[#01998e]/30 max-h-[250px] custom-scrollbar">
+                            <table className="w-full text-[10px] text-center">
+                                <thead className="bg-[#01998e]/20 text-white uppercase sticky top-0 backdrop-blur">
+                                    <tr>
+                                        <th className="px-1 py-2">T (&deg;C)</th>
+                                        <th className="px-1 py-2">10&sup3;/T</th>
+                                        <th className="px-1 py-2">R (&Omega;)</th>
+                                        <th className="px-1 py-2">ln(R)</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="font-mono">
+                                    {recordedData.length === 0 && <tr><td colSpan="4" className="py-4 text-gray-600 italic">No readings.</td></tr>}
+                                    {recordedData.map((d, i) => (
+                                        <tr key={i} className="border-b border-gray-800 hover:bg-white/5">
+                                            <td className="py-1.5 text-white">{d.tempC}</td>
+                                            <td className="py-1.5 text-[#e1f26c]">{d.x}</td>
+                                            <td className="py-1.5 text-white">{d.R}</td>
+                                            <td className="py-1.5 text-[#01998e]">{d.lnR}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Section>
+
+                    {results && (
+                        <Section title="Final Results">
+                            <div className="p-4 bg-black/40 border border-[#e1f26c]/30 rounded-lg space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-gray-400 text-xs">Energy Gap (E<sub>g</sub>):</span>
+                                    <span className="text-[#e1f26c] font-bold text-lg">{results.eg.toFixed(3)} eV</span>
+                                </div>
+                                <div className="flex justify-between items-center border-t border-gray-800 pt-2 text-xs">
+                                    <span className="text-gray-500">Percentage Error:</span>
+                                    <span className={results.error < 5 ? "text-green-500" : "text-red-500"}>
+                                        {results.error.toFixed(2)} %
+                                    </span>
+                                </div>
+                            </div>
+                        </Section>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

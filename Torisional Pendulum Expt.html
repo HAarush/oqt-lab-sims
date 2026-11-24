@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rigidity Modulus Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar to match theme */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e;
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c;
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo } = React;
+
+        // Box-Muller transform to generate realistic human-error Gaussian noise
+        function randomGaussian(mean = 0, stdev = 1) {
+            let u = 1 - Math.random(); // Converting [0,1) to (0,1]
+            let v = Math.random();
+            let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+            return z * stdev + mean;
+        }
+
+        function App() {
+          // --- CONSTANTS ---
+          const L = 1.0; // Length (m)
+          const R_wire = 0.0005; // Radius of wire (m)
+          const M_disc = 1.5; // Mass of disc (kg)
+          const R_disc = 0.08; // Radius of disc (m)
+          const I = 0.5 * M_disc * Math.pow(R_disc, 2); // Moment of Inertia (kg m^2)
+          const TRUE_ETA = 8.0e10; // True Rigidity Modulus (N/m^2) approx Steel
+          
+          // Formula: n = (8 * pi * L * I) / (r^4 * T^2) -> T = sqrt( (8 * pi * L * I) / (n * r^4) )
+          const CONSTANT_C = (8 * Math.PI * L * I) / Math.pow(R_wire, 4);
+          const TRUE_T = Math.sqrt(CONSTANT_C / TRUE_ETA); // approx 2.21 seconds
+          const TRUE_t_20 = TRUE_T * 20; // approx 44.2 seconds
+          const ERROR_STDEV = 0.4; // Human error standard deviation in seconds for 20 oscillations
+
+          // --- STATE ---
+          const [data, setData] = useState([]);
+          const [angle, setAngle] = useState(0);
+          
+          // --- ANIMATION ---
+          const requestRef = useRef();
+          const startTimeRef = useRef(Date.now());
+
+          useEffect(() => {
+            const animate = () => {
+              const elapsed = (Date.now() - startTimeRef.current) / 1000;
+              // SHM angle calculation: theta = theta_max * cos(2 * pi * t / T)
+              const currentAngle = Math.PI / 3 * Math.cos((2 * Math.PI * elapsed) / TRUE_T);
+              setAngle(currentAngle);
+              requestRef.current = requestAnimationFrame(animate);
+            };
+            requestRef.current = requestAnimationFrame(animate);
+            return () => cancelAnimationFrame(requestRef.current);
+          }, []);
+
+          // --- HANDLERS ---
+          const handleRecordSingle = () => {
+             const measured_t = randomGaussian(TRUE_t_20, ERROR_STDEV);
+             const measured_T = measured_t / 20;
+             setData(prev => [...prev, { id: prev.length + 1, t: measured_t, T: measured_T }]);
+          };
+
+          const handleRecordBulk = () => {
+             let newReadings = [];
+             for(let i=0; i<15; i++) {
+                 const measured_t = randomGaussian(TRUE_t_20, ERROR_STDEV);
+                 const measured_T = measured_t / 20;
+                 newReadings.push({ id: data.length + i + 1, t: measured_t, T: measured_T });
+             }
+             setData(prev => [...prev, ...newReadings]);
+          };
+
+          const handleClear = () => setData([]);
+
+          // --- CALCULATIONS ---
+          const stats = useMemo(() => {
+              if (data.length === 0) return null;
+              
+              const n = data.length;
+              let sumT = 0;
+              data.forEach(d => sumT += d.T);
+              const meanT = sumT / n;
+
+              let sumDevSq = 0;
+              const enhancedData = data.map(d => {
+                  const dev = d.T - meanT;
+                  const devSq = dev * dev;
+                  sumDevSq += devSq;
+                  return { ...d, dev, devSq };
+              });
+
+              // Standard deviation (sigma_T) -> using population std dev for N
+              const variance = sumDevSq / n;
+              const sigmaT = Math.sqrt(variance);
+              
+              // Error Propagation
+              const fracError = sigmaT / meanT;
+              const eta = CONSTANT_C / Math.pow(meanT, 2);
+              const deltaEta = eta * 2 * fracError;
+
+              return { n, meanT, sigmaT, enhancedData, eta, deltaEta };
+          }, [data]);
+
+          // --- GRAPH DATA PREPARATION ---
+          const histogram = useMemo(() => {
+              if (!stats || stats.n < 2) return null;
+              
+              // Find min, max, bin size
+              const Ts = data.map(d => d.T);
+              const minT = Math.min(...Ts) - 0.01;
+              const maxT = Math.max(...Ts) + 0.01;
+              const binCount = Math.max(5, Math.ceil(Math.sqrt(stats.n))); // Sturges' roughly
+              const binWidth = (maxT - minT) / binCount;
+              
+              let bins = Array(binCount).fill(0);
+              Ts.forEach(T => {
+                  let binIdx = Math.floor((T - minT) / binWidth);
+                  if (binIdx >= binCount) binIdx = binCount - 1;
+                  bins[binIdx]++;
+              });
+
+              const maxFreq = Math.max(...bins);
+
+              return { minT, maxT, binCount, binWidth, bins, maxFreq };
+          }, [data, stats]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Rigidity Modulus</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">Error Analysis<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual (Scrollable) */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    <Section title="1. Aim">
+                      To determine the Rigidity Modulus (&eta;) using only the Time Period (T) as the primary variable for error analysis, we treat other parameters (Length L, Radius r, and Mass M) as constants with negligible error.
+                      <br/><br/>
+                      By using a torsional pendulum, we analyze the uncertainty in the result based on the Gaussian distribution of the time period measurements.
+                    </Section>
+                    
+                    <Section title="2. Reduced Formula">
+                      Since we are focusing on the error in &eta;:
+                      <div className="text-center my-3 text-[#e1f26c] font-mono text-xl">
+                        &eta; = C / T²
+                      </div>
+                      <p className="text-xs mb-3">Where C is treated as a constant:</p>
+                      <div className="text-center my-2 text-[#01998e] font-mono text-sm">
+                        C = (8 &times; &pi; &times; l &times; I) / r⁴
+                      </div>
+                      <p className="text-xs">I is the Moment of Inertia of the disc (MR²/2).</p>
+                    </Section>
+
+                    <Section title="3. Gaussian Error Analysis for T">
+                      <p>Take at least 10 to 15 readings for the time of a fixed number of oscillations (e.g., 20 oscillations).</p>
+                      <ul className="list-disc pl-5 mt-2 space-y-1 text-xs">
+                        <li><strong>Mean Time Period (T<sub className="text-[9px]">mean</sub>):</strong> Average of all T.</li>
+                        <li><strong>Deviation (&Delta;T<sub className="text-[9px]">i</sub>):</strong> T<sub className="text-[9px]">i</sub> - T<sub className="text-[9px]">mean</sub></li>
+                        <li><strong>Standard Deviation (&sigma;<sub className="text-[9px]">T</sub>):</strong> &radic;(&Sigma;&Delta;T<sub className="text-[9px]">i</sub>² / N)</li>
+                      </ul>
+                      <p className="mt-3"><strong>Propagation to &eta;:</strong> Since &eta; &prop; T⁻², the fractional error is:</p>
+                      <div className="text-center my-2 text-[#e1f26c] font-mono text-sm">
+                        &Delta;&eta; / &eta; = 2 &times; (&sigma;<sub className="text-[9px]">T</sub> / T<sub className="text-[9px]">mean</sub>)
+                      </div>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-2 lg:p-4 min-h-[300px] overflow-hidden relative">
+                       {/* Background Grid */}
+                       <svg className="absolute inset-0 w-full h-full opacity-20 pointer-events-none">
+                         <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+                           <rect width="30" height="30" fill="none" stroke="#01998e" strokeWidth="0.5"/>
+                         </pattern>
+                         <rect width="100%" height="100%" fill="url(#grid)" />
+                       </svg>
+
+                       {/* Main Pendulum Display */}
+                       <div className="flex w-full h-full relative z-10">
+                         {/* Side View */}
+                         <div className="flex-1 flex flex-col items-center justify-start pt-10 relative">
+                           <div className="text-xs text-gray-500 absolute top-2 left-2 uppercase tracking-widest font-bold">Side View</div>
+                           {/* Support */}
+                           <div className="w-24 h-4 bg-gray-800 border-b-2 border-gray-600 rounded-t-md z-10"></div>
+                           {/* Wire */}
+                           <div className="w-1 h-40 bg-gradient-to-b from-gray-500 to-[#e1f26c] shadow-[0_0_8px_#e1f26c]"></div>
+                           {/* Disc (Animated 3D feel) */}
+                           <div className="relative flex items-center justify-center" style={{ perspective: '300px' }}>
+                             <div 
+                               className="w-32 h-12 rounded-full border-4 border-[#01998e] flex items-center justify-center shadow-[0_0_20px_rgba(1,153,142,0.5)]"
+                               style={{ 
+                                 background: 'radial-gradient(ellipse at center, #111 0%, #000 100%)',
+                                 transform: `rotateX(60deg) rotateZ(${angle * (180/Math.PI)}deg)`,
+                                 transition: 'transform 0.05s linear'
+                               }}
+                             >
+                               {/* Reference Line on Disc */}
+                               <div className="w-full h-1 bg-[#e1f26c]"></div>
+                             </div>
+                           </div>
+                         </div>
+
+                         {/* Top View Inset */}
+                         <div className="flex-1 border-l border-gray-800 flex flex-col items-center justify-center relative">
+                           <div className="text-xs text-gray-500 absolute top-2 left-2 uppercase tracking-widest font-bold">Top View (Oscillation)</div>
+                           
+                           <svg width="140" height="140" viewBox="-70 -70 140 140" className="drop-shadow-[0_0_10px_rgba(225,242,108,0.2)]">
+                             {/* Base Circle */}
+                             <circle cx="0" cy="0" r="60" fill="#111" stroke="#01998e" strokeWidth="3" />
+                             {/* Origin */}
+                             <circle cx="0" cy="0" r="3" fill="#e1f26c" />
+                             {/* Extents */}
+                             <line x1="0" y1="0" x2={60 * Math.cos(-Math.PI/3)} y2={60 * Math.sin(-Math.PI/3)} stroke="#333" strokeWidth="2" strokeDasharray="3,3" />
+                             <line x1="0" y1="0" x2={60 * Math.cos(Math.PI/3)} y2={60 * Math.sin(Math.PI/3)} stroke="#333" strokeWidth="2" strokeDasharray="3,3" />
+                             
+                             {/* Animated Pointer Line */}
+                             <g style={{ transform: `rotate(${angle * (180/Math.PI)}deg)` }}>
+                               <line x1="0" y1="0" x2="60" y2="0" stroke="#e1f26c" strokeWidth="4" strokeLinecap="round" />
+                               <circle cx="55" cy="0" r="4" fill="#fff" />
+                             </g>
+                             
+                             {/* Dynamic Angle Indicator */}
+                             <path d={`M 20 0 A 20 20 0 0 ${angle > 0 ? 1 : 0} ${20*Math.cos(angle)} ${20*Math.sin(angle)}`} fill="none" stroke="#ff4444" strokeWidth="2" />
+                           </svg>
+                           <div className="mt-4 font-mono text-sm text-[#01998e]">
+                             &theta;(t) = &theta;&infin; cos(&omega;t)
+                           </div>
+                         </div>
+                       </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 lg:p-6 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      <div className="text-center text-xs text-gray-400 mb-2">
+                        Measure time for 20 oscillations. Human reaction time creates a normal distribution of error.
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button 
+                          onClick={handleRecordSingle}
+                          className="py-3 bg-gradient-to-r from-[#01998e] to-[#017a72] hover:from-[#01b3a6] hover:to-[#01998e] text-white font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(1,153,142,0.4)] active:scale-95 text-sm flex items-center justify-center gap-2"
+                        >
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                          Manual Measure (1 Trial)
+                        </button>
+                        <button 
+                          onClick={handleRecordBulk}
+                          className="py-3 bg-gradient-to-r from-[#e1f26c] to-[#b8ca4b] hover:from-[#f2ff85] hover:to-[#e1f26c] text-black font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(225,242,108,0.4)] active:scale-95 text-sm"
+                        >
+                          Auto-Simulate (15 Trials)
+                        </button>
+                        <button 
+                          onClick={handleClear}
+                          disabled={data.length === 0}
+                          className="py-3 sm:col-span-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 font-bold rounded-lg transition-all active:scale-95 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Clear All Data
+                        </button>
+                      </div>
+                      
+                      <div className="flex justify-between mt-2 border-t border-gray-800 pt-3 text-[10px] text-gray-500 font-mono uppercase">
+                        <span>True T: {TRUE_T.toFixed(3)}s</span>
+                        <span>Constants Set (L, R, M)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    <Section title="4. Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30 max-h-[250px] overflow-y-auto custom-scrollbar">
+                        <table className="w-full text-xs text-center relative">
+                          <thead className="uppercase bg-[#01998e]/20 text-white sticky top-0 z-10 backdrop-blur-md">
+                            <tr>
+                              <th className="px-2 py-3">Trial</th>
+                              <th className="px-2 py-3">t (20 osc)</th>
+                              <th className="px-2 py-3">T (t/20)</th>
+                              <th className="px-2 py-3">&Delta;T</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {data.length === 0 ? (
+                              <tr><td colSpan="4" className="px-4 py-8 text-center text-gray-500 italic">Record trials to populate table.</td></tr>
+                            ) : (
+                              (stats ? stats.enhancedData : data).map((row, i) => (
+                                <tr key={row.id} className="border-b border-gray-800 hover:bg-white/5 font-mono">
+                                  <td className="px-2 py-2 text-white">{row.id}</td>
+                                  <td className="px-2 py-2 text-[#e1f26c]">{row.t.toFixed(2)}</td>
+                                  <td className="px-2 py-2 text-white">{row.T.toFixed(3)}</td>
+                                  <td className="px-2 py-2 text-[#ff4444]">
+                                    {row.dev ? (row.dev > 0 ? "+" : "") + row.dev.toFixed(3) : "-"}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                          {stats && (
+                            <tfoot className="sticky bottom-0 bg-[#050505] border-t-2 border-[#01998e]">
+                              <tr className="font-bold text-[#01998e]">
+                                <td className="px-2 py-2 text-right uppercase" colSpan="2">Mean T:</td>
+                                <td className="px-2 py-2">{stats.meanT.toFixed(3)}</td>
+                                <td></td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                    </Section>
+
+                    <Section title="5. Graph: Gaussian Distribution">
+                      <div className="w-full aspect-video bg-[#0a0a0a] rounded-lg border border-gray-800 relative flex items-center justify-center p-2 overflow-hidden">
+                        {data.length < 2 ? (
+                           <div className="text-gray-600 italic text-sm text-center">Requires multiple readings to generate distribution.</div>
+                        ) : (
+                           <svg viewBox="0 0 100 100" className="w-full h-full overflow-visible" preserveAspectRatio="none">
+                             {/* Axes */}
+                             <line x1="5" y1="90" x2="95" y2="90" stroke="gray" strokeWidth="0.5"/>
+                             <line x1="5" y1="90" x2="5" y2="5" stroke="gray" strokeWidth="0.5"/>
+                             <text x="50" y="98" fill="gray" fontSize="4" textAnchor="middle">Time Period T (s)</text>
+                             <text x="-50" y="3" fill="gray" fontSize="4" textAnchor="middle" transform="rotate(-90)">Frequency</text>
+                             
+                             {/* Histogram Bars */}
+                             {histogram && histogram.bins.map((count, i) => {
+                                 if(count === 0) return null;
+                                 const x = 5 + (i * (90 / histogram.binCount));
+                                 const w = 90 / histogram.binCount;
+                                 const h = (count / histogram.maxFreq) * 80;
+                                 const y = 90 - h;
+                                 return (
+                                     <rect key={i} x={x} y={y} width={w*0.95} height={h} fill="#01998e" opacity="0.6" />
+                                 );
+                             })}
+
+                             {/* Theoretical Ideal Bell Curve Overlay */}
+                             {stats && (
+                                <path 
+                                  d={(() => {
+                                    // Generate points for the bell curve
+                                    let path = "";
+                                    for(let i=0; i<=100; i++) {
+                                      const percent = i / 100;
+                                      const xVal = histogram.minT + (percent * (histogram.maxT - histogram.minT));
+                                      const svgX = 5 + (percent * 90);
+                                      
+                                      // Normal Distribution PDF formula
+                                      const exp = Math.exp(-0.5 * Math.pow((xVal - stats.meanT) / stats.sigmaT, 2));
+                                      const pdf = (1 / (stats.sigmaT * Math.sqrt(2 * Math.PI))) * exp;
+                                      
+                                      // Scale PDF to SVG Y space (rough heuristic scaling to match highest bin visually)
+                                      const theoreticalMaxPdf = 1 / (stats.sigmaT * Math.sqrt(2 * Math.PI));
+                                      const h = (pdf / theoreticalMaxPdf) * 80;
+                                      const svgY = 90 - h;
+
+                                      if(i === 0) path += `M ${svgX} ${svgY} `;
+                                      else path += `L ${svgX} ${svgY} `;
+                                    }
+                                    return path;
+                                  })()}
+                                  fill="none" stroke="#e1f26c" strokeWidth="1.5" strokeDasharray="1,1" 
+                                />
+                             )}
+                             
+                             {/* Mean Line Marker */}
+                             {stats && (
+                                <g transform={`translate(${5 + ((stats.meanT - histogram.minT)/(histogram.maxT - histogram.minT)) * 90}, 0)`}>
+                                  <line x1="0" y1="5" x2="0" y2="90" stroke="#fff" strokeWidth="0.5" strokeDasharray="2,2"/>
+                                  <text x="0" y="4" fill="#fff" fontSize="3" textAnchor="middle">Mean</text>
+                                </g>
+                             )}
+                           </svg>
+                        )}
+                      </div>
+                    </Section>
+
+                    {stats && (
+                      <Section title="6. Final Calculations">
+                        <div className="space-y-3 font-mono text-sm bg-black/40 p-3 rounded-lg border border-gray-800">
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span>Mean T (T<sub className="text-[10px]">mean</sub>):</span>
+                            <span className="text-white">{stats.meanT.toFixed(3)} s</span>
+                          </div>
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span>Error (&sigma;<sub className="text-[10px]">T</sub>):</span>
+                            <span className="text-[#ff4444]">&plusmn; {stats.sigmaT.toFixed(3)} s</span>
+                          </div>
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span>Main Value (&eta;):</span>
+                            <span className="text-[#01998e]">{stats.eta.toExponential(3)} N/m²</span>
+                          </div>
+                          <div className="flex justify-between font-bold">
+                            <span>Final Result:</span>
+                            <span className="text-[#e1f26c]">{stats.eta.toExponential(3)} &plusmn; {stats.deltaEta.toExponential(2)}</span>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

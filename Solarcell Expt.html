@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Cell Characteristics Simulator</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Load Babel to compile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+        /* Global CSS for Custom Scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: rgba(0, 0, 0, 0.5);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #01998e; /* Teal theme */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #e1f26c; /* Lime theme */
+        }
+        .solar-bg {
+            background-image: radial-gradient(circle at top, rgba(225, 242, 108, 0.05) 0%, rgba(0, 0, 0, 0.8) 70%);
+        }
+    </style>
+</head>
+<body class="bg-black">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        function App() {
+          // --- STATE ---
+          const [lightDist, setLightDist] = useState(10); // Distance in cm (10 to 50)
+          const [loadV, setLoadV] = useState(0.00); // Operating Voltage (acting as variable load)
+          const [recordedData, setRecordedData] = useState([]);
+
+          // --- PHYSICS MODEL ---
+          // Isc depends strongly on light intensity (1/d^2)
+          // Voc depends logarithmically on intensity (varies slightly)
+          const Isc_max = 50.0; // mA at 10 cm
+          const current_Isc = Isc_max * Math.pow(10 / lightDist, 2);
+          const current_Voc = 0.60 + 0.05 * Math.log(current_Isc / Isc_max); 
+
+          // Ensure loadV stays within bounds if light intensity drops
+          useEffect(() => {
+              if (loadV > current_Voc) {
+                  setLoadV(parseFloat(current_Voc.toFixed(2)));
+              }
+          }, [lightDist, current_Voc, loadV]);
+
+          // I-V Curve Equation: I = Isc * (1 - exp(K * (V - Voc)))
+          const K = 20; // Curve sharpness factor
+          const calculateCurrent = (v) => {
+              if (v >= current_Voc) return 0;
+              return current_Isc * (1 - Math.exp(K * (v - current_Voc)));
+          };
+
+          const activeCurrent = calculateCurrent(loadV);
+          const activePower = loadV * activeCurrent; // mW
+
+          // Theoretical Ideal Pmax for the current light intensity (Scanning approach)
+          const maxPowerPoint = useMemo(() => {
+              let pMax = 0;
+              let vMax = 0;
+              let iMax = 0;
+              for (let v = 0; v <= current_Voc; v += 0.01) {
+                  const i = calculateCurrent(v);
+                  const p = v * i;
+                  if (p > pMax) {
+                      pMax = p;
+                      vMax = v;
+                      iMax = i;
+                  }
+              }
+              return { pMax, vMax, iMax };
+          }, [current_Isc, current_Voc]);
+
+          // --- HANDLERS ---
+          const handleRecord = () => {
+              // Prevent exact duplicate V entries
+              if (recordedData.some(d => d.V === parseFloat(loadV.toFixed(2)))) return;
+              
+              const newData = [...recordedData, {
+                  V: parseFloat(loadV.toFixed(2)),
+                  I: parseFloat(activeCurrent.toFixed(2)),
+                  P: parseFloat(activePower.toFixed(2)),
+                  dist: lightDist // To tag which intensity this belongs to
+              }];
+              newData.sort((a, b) => a.V - b.V);
+              setRecordedData(newData);
+          };
+
+          const handleClear = () => setRecordedData([]);
+
+          const setShortCircuit = () => setLoadV(0.00);
+          const setOpenCircuit = () => setLoadV(parseFloat(current_Voc.toFixed(2)));
+
+          // --- CALCULATIONS FOR RESULTS ---
+          const results = useMemo(() => {
+              // Only compute if we have enough points for the CURRENT light distance
+              const currentData = recordedData.filter(d => d.dist === lightDist);
+              if (currentData.length < 3) return null;
+
+              // Find experimental Pmax
+              let expPmax = 0, expVmp = 0, expImp = 0;
+              currentData.forEach(d => {
+                  if (d.P > expPmax) {
+                      expPmax = d.P;
+                      expVmp = d.V;
+                      expImp = d.I;
+                  }
+              });
+
+              // Extract experimental Isc (near V=0) and Voc (near I=0)
+              const expIsc = currentData[0].I; // Sorted by V, so V=0 is first
+              const expVoc = currentData[currentData.length - 1].V; 
+
+              // Calculate Fill Factor (FF)
+              const FF = expPmax / (expVoc * expIsc);
+
+              // Calculate Efficiency
+              // Assume Solar Cell Area = 10 cm^2. Max intensity at 10cm = 1000 W/m^2 = 100 mW/cm^2
+              const Pin_total_mW = 100 * 10 * Math.pow(10 / lightDist, 2);
+              const efficiency = (expPmax / Pin_total_mW) * 100;
+
+              // Series Resistance (Rs) -> 1 / slope near Voc
+              // Find two points with highest voltage
+              const pt1 = currentData[currentData.length - 1];
+              const pt2 = currentData[currentData.length - 2];
+              let Rs = 0;
+              if (pt1 && pt2 && Math.abs(pt1.I - pt2.I) > 0) {
+                  // dV / dI. Voltage in V, Current in mA. Result in Ohms -> (V / (mA * 10^-3))
+                  const dV = Math.abs(pt1.V - pt2.V);
+                  const dI = Math.abs(pt1.I - pt2.I) / 1000; // Convert mA to A
+                  Rs = dV / dI;
+              }
+
+              return { expPmax, expVmp, expImp, expIsc, expVoc, FF, efficiency, Rs };
+          }, [recordedData, lightDist]);
+
+          // --- SUB-COMPONENTS ---
+          const GradientText = ({ children, className = "" }) => (
+            <span className={`bg-clip-text text-transparent bg-gradient-to-r from-[#e1f26c] to-[#01998e] ${className}`}>
+              {children}
+            </span>
+          );
+
+          const Section = ({ title, children }) => (
+            <div className="mb-6 border border-[#01998e]/30 p-4 rounded-xl bg-black/50 backdrop-blur-sm shadow-[0_0_15px_rgba(1,153,142,0.1)]">
+              <h2 className="text-xl font-bold mb-3"><GradientText>{title}</GradientText></h2>
+              <div className="text-sm text-gray-300 space-y-2 leading-relaxed">
+                {children}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="min-h-screen bg-[#000000] text-white font-sans flex items-center justify-center p-2 sm:p-4">
+              {/* Main 16:9 Aspect Ratio Container */}
+              <div className="w-full max-w-[1920px] max-h-[1080px] lg:aspect-video flex flex-col border-2 border-[#01998e]/40 rounded-2xl overflow-hidden shadow-[0_0_40px_rgba(1,153,142,0.15)] bg-[#050505]">
+                
+                {/* Header */}
+                <header className="flex items-center justify-between p-4 border-b border-[#01998e]/30 bg-black/80 z-10">
+                  <div className="flex items-center space-x-4 w-1/3">
+                    <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" className="h-10 object-contain drop-shadow-[0_0_8px_rgba(225,242,108,0.8)]" />
+                  </div>
+                  <div className="text-center w-1/3">
+                    <h1 className="text-2xl md:text-3xl font-extrabold uppercase tracking-widest"><GradientText>Solar Cell</GradientText></h1>
+                  </div>
+                  <div className="w-1/3 flex justify-end">
+                    <div className="text-xs text-right text-gray-400">V-I Characteristics<br/>Virtual Lab</div>
+                  </div>
+                </header>
+
+                {/* Content Grid */}
+                <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+                  
+                  {/* LEFT: Theory & Manual */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-r border-[#01998e]/30 custom-scrollbar">
+                    
+                    <Section title="1. Aim">
+                      To study the V-I characteristics of a solar cell and to calculate its Fill Factor, Efficiency, and Series Resistance.
+                    </Section>
+
+                    <Section title="2. Circuit Diagram">
+                      <ul className="list-disc pl-5 space-y-1 text-xs text-gray-300">
+                        <li>The Solar Cell acts as a battery.</li>
+                        <li><strong>Ammeter:</strong> Connected in series with the variable load.</li>
+                        <li><strong>Voltmeter:</strong> Connected in parallel across the solar cell.</li>
+                        <li><strong>Variable Load:</strong> Swept from 0&Omega; (Short Circuit) to &infin; (Open Circuit).</li>
+                      </ul>
+                    </Section>
+
+                    <Section title="3. Procedure">
+                      <ol className="list-decimal pl-5 space-y-2 text-xs text-gray-400">
+                        <li>Place the light source at a fixed distance.</li>
+                        <li><strong>Open Circuit:</strong> Set load to maximum. Record V<sub className="text-[9px]">oc</sub> (Current = 0).</li>
+                        <li><strong>Short Circuit:</strong> Set load to minimum (0V). Record I<sub className="text-[9px]">sc</sub> (Voltage = 0).</li>
+                        <li><strong>Varying Load:</strong> Gradually adjust the Operating Voltage slider to sweep the load curve. Record V and I.</li>
+                        <li>The maximum power point P<sub className="text-[9px]">max</sub> will be identified on the curve.</li>
+                      </ol>
+                    </Section>
+
+                    <Section title="4. Formulas">
+                      <p><strong>Fill Factor (FF):</strong></p>
+                      <div className="text-center my-2 text-[#e1f26c] font-mono text-sm bg-[#111] p-1 rounded">
+                        FF = P<sub className="text-[10px]">max</sub> / (V<sub className="text-[10px]">oc</sub> &times; I<sub className="text-[10px]">sc</sub>)
+                      </div>
+                      <p><strong>Efficiency (&eta;):</strong></p>
+                      <div className="text-center my-2 text-[#01998e] font-mono text-sm bg-[#111] p-1 rounded">
+                        &eta; = (P<sub className="text-[10px]">max</sub> / P<sub className="text-[10px]">in</sub>) &times; 100%
+                      </div>
+                      <p><strong>Series Resistance (R<sub className="text-[10px]">s</sub>):</strong></p>
+                      <div className="text-center my-2 text-white font-mono text-sm bg-[#111] p-1 rounded">
+                        R<sub className="text-[10px]">s</sub> &approx; 1 / (Slope near V<sub className="text-[10px]">oc</sub>) = |&Delta;V/&Delta;I|
+                      </div>
+                    </Section>
+                  </div>
+
+                  {/* CENTER: Interactive Simulator */}
+                  <div className="w-full lg:w-1/3 flex flex-col relative bg-[#0a0a0a]">
+                    
+                    {/* Visual Apparatus Setup */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-0 relative border-b border-gray-800 bg-[#050505] overflow-hidden solar-bg">
+                       
+                       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full absolute inset-0">
+                           {/* Light Source (Halogen Lamp) */}
+                           <g transform={`translate(50, ${10 - (lightDist-10)*0.5})`}>
+                               <circle cx="0" cy="0" r="8" fill="#e1f26c" className="drop-shadow-[0_0_15px_#e1f26c]" opacity={10/lightDist} />
+                               <path d="M -4 -8 L 4 -8 L 6 -15 L -6 -15 Z" fill="#444" />
+                               {/* Rays */}
+                               {[0, 1, -1, 2, -2].map((ray, i) => (
+                                  <line key={i} x1={ray*3} y1="8" x2={ray*12} y2="40" stroke="#e1f26c" strokeWidth="1" opacity={0.5 * (10/lightDist)} strokeDasharray="2,2" />
+                               ))}
+                           </g>
+
+                           {/* Solar Cell Panel */}
+                           <g transform="translate(50, 60)">
+                               <rect x="-25" y="-5" width="50" height="10" fill="#003366" stroke="#00bfff" strokeWidth="1" />
+                               {/* Panel Grid lines */}
+                               <line x1="-15" y1="-5" x2="-15" y2="5" stroke="#fff" strokeWidth="0.5" opacity="0.5" />
+                               <line x1="-5" y1="-5" x2="-5" y2="5" stroke="#fff" strokeWidth="0.5" opacity="0.5" />
+                               <line x1="5" y1="-5" x2="5" y2="5" stroke="#fff" strokeWidth="0.5" opacity="0.5" />
+                               <line x1="15" y1="-5" x2="15" y2="5" stroke="#fff" strokeWidth="0.5" opacity="0.5" />
+                               <line x1="-25" y1="0" x2="25" y2="0" stroke="#fff" strokeWidth="0.5" opacity="0.5" />
+                               <text x="0" y="12" fill="#00bfff" fontSize="4" textAnchor="middle">Silicon Solar Cell</text>
+                           </g>
+
+                           {/* Circuit Wiring */}
+                           {/* Positive Wire to Ammeter */}
+                           <path d="M 70 60 L 85 60 L 85 80" fill="none" stroke="#ff4444" strokeWidth="1.5" />
+                           {/* Negative Wire to Load */}
+                           <path d="M 30 60 L 15 60 L 15 85 L 35 85" fill="none" stroke="#00bfff" strokeWidth="1.5" />
+                           
+                           {/* Ammeter */}
+                           <circle cx="85" cy="85" r="5" fill="#111" stroke="#e1f26c" strokeWidth="1" />
+                           <text x="85" y="86.5" fill="#e1f26c" fontSize="5" textAnchor="middle" fontWeight="bold">A</text>
+
+                           {/* Rheostat (Variable Load) */}
+                           <rect x="40" y="82" width="30" height="6" fill="#333" stroke="#888" strokeWidth="1" />
+                           <path d="M 40 85 L 35 85" fill="none" stroke="#00bfff" strokeWidth="1.5" />
+                           <path d="M 70 85 L 80 85" fill="none" stroke="#ff4444" strokeWidth="1.5" />
+                           {/* Slider arrow on Rheostat */}
+                           <g transform={`translate(${45 + (loadV/current_Voc)*20}, 80)`}>
+                              <path d="M 0 -5 L 3 0 L -3 0 Z" fill="#e1f26c" />
+                              <line x1="0" y1="-10" x2="0" y2="-5" stroke="#e1f26c" strokeWidth="1" />
+                           </g>
+
+                           {/* Voltmeter in Parallel */}
+                           <path d="M 25 60 L 25 45 L 75 45 L 75 60" fill="none" stroke="#888" strokeWidth="1" strokeDasharray="1,1" />
+                           <circle cx="50" cy="45" r="5" fill="#111" stroke="#01998e" strokeWidth="1" />
+                           <text x="50" y="46.5" fill="#01998e" fontSize="5" textAnchor="middle" fontWeight="bold">V</text>
+
+                       </svg>
+
+                       <div className="absolute top-2 left-2 flex gap-1">
+                          <button onClick={setShortCircuit} className="text-[8px] bg-black/80 text-[#e1f26c] px-2 py-1 border border-[#e1f26c]/50 rounded hover:bg-[#e1f26c]/20">SET TO I<sub className="text-[6px]">SC</sub></button>
+                          <button onClick={setOpenCircuit} className="text-[8px] bg-black/80 text-[#01998e] px-2 py-1 border border-[#01998e]/50 rounded hover:bg-[#01998e]/20">SET TO V<sub className="text-[6px]">OC</sub></button>
+                       </div>
+                    </div>
+
+                    {/* Control Panel */}
+                    <div className="flex-none p-4 bg-black border-t border-[#01998e]/40 flex flex-col gap-4 shadow-[0_-10px_30px_rgba(0,0,0,0.8)] z-10">
+                      
+                      {/* Meters */}
+                      <div className="flex gap-2 justify-between">
+                        <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#01998e]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Voltmeter (V)</span>
+                          <div className="font-mono text-xl md:text-2xl text-[#01998e] drop-shadow-[0_0_8px_rgba(1,153,142,0.5)]">
+                              {loadV.toFixed(3)} <span className="text-xs text-gray-400">V</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#e1f26c]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Ammeter (I)</span>
+                          <div className="font-mono text-xl md:text-2xl text-[#e1f26c] drop-shadow-[0_0_10px_rgba(225,242,108,0.5)]">
+                              {activeCurrent.toFixed(1)} <span className="text-xs text-gray-400">mA</span>
+                          </div>
+                        </div>
+                        <div className="flex-1 bg-[#050505] border-2 border-[#111] p-2 rounded-lg text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#ff4444]"></div>
+                          <span className="text-[9px] uppercase text-gray-500 tracking-widest">Power (P)</span>
+                          <div className="font-mono text-xl md:text-2xl text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.5)]">
+                              {activePower.toFixed(1)} <span className="text-xs text-gray-400">mW</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Sliders */}
+                      <div className="space-y-4 mt-2">
+                        {/* Intensity Slider */}
+                        <div>
+                            <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase mb-1">
+                            <span>Close (High Int)</span>
+                            <span className="text-white font-bold">Light Source Distance</span>
+                            <span>Far (Low Int)</span>
+                            </div>
+                            <input 
+                            type="range" min="10" max="50" step="1" value={lightDist} onChange={(e) => setLightDist(parseInt(e.target.value))}
+                            className="w-full h-1.5 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                            style={{ background: `linear-gradient(to right, #ffffff 0%, #aaa ${((lightDist-10)/40)*100}%, #333 ${((lightDist-10)/40)*100}%, #333 100%)` }}
+                            />
+                        </div>
+
+                        {/* Load Slider */}
+                        <div>
+                            <div className="flex justify-between text-[10px] text-gray-400 font-mono uppercase mb-1">
+                            <span>0V (Short)</span>
+                            <span className="text-[#01998e] font-bold">Adjust Load (Operating V)</span>
+                            <span>V<sub className="text-[8px]">oc</sub> (Open)</span>
+                            </div>
+                            <input 
+                            type="range" min="0" max={current_Voc} step="0.001" value={loadV} onChange={(e) => setLoadV(parseFloat(e.target.value))}
+                            className="w-full h-2 bg-gray-800 rounded-lg appearance-none cursor-pointer"
+                            style={{ background: `linear-gradient(to right, #e1f26c 0%, #01998e ${(loadV/current_Voc)*100}%, #333 ${(loadV/current_Voc)*100}%, #333 100%)` }}
+                            />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <button 
+                          onClick={handleRecord}
+                          className="py-2 bg-gradient-to-r from-[#01998e] to-[#017a72] text-white text-xs font-bold rounded shadow-[0_0_10px_rgba(1,153,142,0.4)] active:scale-95 transition-all"
+                        >
+                          Record V-I Point
+                        </button>
+                        <button 
+                          onClick={handleClear}
+                          className="py-2 bg-transparent border border-red-500/50 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded transition-all active:scale-95"
+                        >
+                          Clear Current Set
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* RIGHT: Data, Table & Graph */}
+                  <div className="w-full lg:w-1/3 p-4 overflow-y-auto border-l border-[#01998e]/30 flex flex-col gap-6 custom-scrollbar">
+                    
+                    {/* Live V-I Graph */}
+                    <Section title="V-I Characteristic Curve">
+                      <div className="w-full aspect-video bg-[#0a0a0a] rounded-lg border border-gray-800 relative flex items-center justify-center p-2">
+                        <span className="absolute top-1 right-2 text-[8px] text-[#e1f26c] bg-black/80 px-1 rounded">Isc: {current_Isc.toFixed(1)}mA</span>
+                        <span className="absolute bottom-1 right-2 text-[8px] text-[#01998e] bg-black/80 px-1 rounded">Voc: {current_Voc.toFixed(2)}V</span>
+                        
+                        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full mt-2 overflow-visible">
+                          {/* Axes */}
+                          <line x1="10" y1="90" x2="95" y2="90" stroke="#555" strokeWidth="1"/>
+                          <line x1="10" y1="90" x2="10" y2="5" stroke="#555" strokeWidth="1"/>
+                          
+                          <text x="50" y="98" fill="gray" fontSize="4" textAnchor="middle">Voltage V (Volts)</text>
+                          <text x="2" y="50" fill="gray" fontSize="4" textAnchor="middle" transform="rotate(-90 2 50)">Current I (mA)</text>
+
+                          {/* Ideal Curve Path Background */}
+                          {(() => {
+                              let path = `M 10 ${90 - (calculateCurrent(0)/60)*85} `;
+                              for(let v = 0; v <= current_Voc; v += 0.01) {
+                                  const i = calculateCurrent(v);
+                                  const px = 10 + (v / 0.7) * 85; // Max X is 0.7V
+                                  const py = 90 - (i / 60) * 85;  // Max Y is 60mA
+                                  path += `L ${px} ${py} `;
+                              }
+                              return <path d={path} fill="none" stroke="#333" strokeWidth="0.5" strokeDasharray="1,1" />
+                          })()}
+
+                          {/* Max Power Rectangle (Faint Background) */}
+                          <rect 
+                              x="10" 
+                              y={90 - (maxPowerPoint.iMax / 60) * 85} 
+                              width={(maxPowerPoint.vMax / 0.7) * 85} 
+                              height={(maxPowerPoint.iMax / 60) * 85} 
+                              fill="#01998e" opacity="0.15" 
+                          />
+                          {/* Voc x Isc Rectangle (Ideal Limit) */}
+                          <rect 
+                              x="10" 
+                              y={90 - (current_Isc / 60) * 85} 
+                              width={(current_Voc / 0.7) * 85} 
+                              height={(current_Isc / 60) * 85} 
+                              fill="none" stroke="#fff" strokeWidth="0.2" opacity="0.3" strokeDasharray="2,2"
+                          />
+
+                          {/* Recorded Data Points */}
+                          {recordedData.filter(d => d.dist === lightDist).map((pt, idx) => {
+                              const cx = 10 + (pt.V / 0.7) * 85;
+                              const cy = 90 - (pt.I / 60) * 85;
+                              return (
+                                <circle key={idx} cx={cx} cy={cy} r="1.5" fill="#e1f26c" className="drop-shadow-[0_0_2px_#e1f26c]" />
+                              )
+                          })}
+                          
+                          {/* Live Indicator Crosshair */}
+                          <circle cx={10 + (loadV/0.7)*85} cy={90 - (activeCurrent/60)*85} r="2" fill="none" stroke="#01998e" strokeWidth="0.8" />
+                        </svg>
+                      </div>
+                    </Section>
+
+                    {/* TABLE */}
+                    <Section title="Observation Table">
+                      <div className="overflow-x-auto rounded-lg border border-[#01998e]/30 max-h-[200px] custom-scrollbar">
+                        <table className="w-full text-[10px] sm:text-xs text-center relative">
+                          <thead className="uppercase bg-[#01998e]/20 text-white sticky top-0 backdrop-blur">
+                            <tr>
+                              <th className="px-1 py-2">Volt (V)</th>
+                              <th className="px-1 py-2">Curr (mA)</th>
+                              <th className="px-1 py-2">Power (mW)</th>
+                            </tr>
+                          </thead>
+                          <tbody className="font-mono">
+                            {recordedData.filter(d => d.dist === lightDist).length === 0 && <tr><td colSpan="3" className="py-4 text-gray-500 italic">Sweep load and record data.</td></tr>}
+                            {recordedData.filter(d => d.dist === lightDist).map((row, idx) => (
+                                <tr key={idx} className="border-b border-gray-800 hover:bg-white/5">
+                                    <td className="px-1 py-1.5 text-[#01998e] font-bold">{row.V.toFixed(2)}</td>
+                                    <td className="px-1 py-1.5 text-[#e1f26c]">{row.I.toFixed(1)}</td>
+                                    <td className="px-1 py-1.5 text-white">{row.P.toFixed(1)}</td>
+                                </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Section>
+
+                    {results && (
+                      <Section title="Calculated Results">
+                        <div className="space-y-3 font-mono text-sm bg-black/40 p-4 rounded-lg border border-[#e1f26c]/30 relative overflow-hidden">
+                          <div className="absolute right-0 top-0 w-1 h-full bg-[#e1f26c]"></div>
+                          
+                          <div className="flex justify-between items-center text-[10px] text-gray-500 mb-2">
+                             <span>Measurements near Voc/Isc limits</span>
+                          </div>
+
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">P<sub className="text-[10px]">max</sub> (max V&times;I):</span>
+                            <span className="text-white">{results.expPmax.toFixed(2)} mW</span>
+                          </div>
+                          
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Fill Factor (FF):</span>
+                            <span className="text-[#01998e] font-bold">{results.FF.toFixed(3)}</span>
+                          </div>
+
+                          <div className="flex justify-between border-b border-gray-800 pb-2">
+                            <span className="text-gray-400">Efficiency (&eta;):</span>
+                            <span className="text-[#e1f26c] font-bold">{results.efficiency.toFixed(2)} %</span>
+                          </div>
+
+                          <div className="flex justify-between pt-1">
+                            <span className="text-gray-400">Series Resist. (R<sub className="text-[10px]">s</sub>):</span>
+                            <span className="text-white font-bold">{results.Rs.toFixed(1)} &Omega;</span>
+                          </div>
+                        </div>
+                      </Section>
+                    )}
+
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

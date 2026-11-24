@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>P-N Junction Diode I-V Characteristics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        lime: '#e1f26c',
+                        teal: '#01998e',
+                        blackbg: '#000000',
+                        panel: '#111111',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #000000;
+            color: #ffffff;
+            overscroll-behavior-y: none;
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #111; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(to bottom, #e1f26c, #01998e); 
+            border-radius: 4px;
+        }
+
+        /* Custom Range Slider */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #e1f26c;
+            cursor: pointer;
+            margin-top: -10px;
+            box-shadow: 0 0 10px rgba(225, 242, 108, 0.8);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: linear-gradient(to right, #01998e, #e1f26c);
+            border-radius: 3px;
+        }
+        
+        .gradient-text {
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-image: linear-gradient(to right, #e1f26c, #01998e);
+        }
+
+        .gradient-border {
+            position: relative;
+            border-radius: 0.5rem;
+            background: #111;
+            padding: 1px;
+        }
+        .gradient-border::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 0.5rem;
+            padding: 2px;
+            background: linear-gradient(to right, #e1f26c, #01998e);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            pointer-events: none;
+        }
+
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .tab-btn.active {
+            background: linear-gradient(to right, rgba(225, 242, 108, 0.1), rgba(1, 153, 142, 0.1));
+            border-bottom: 2px solid #e1f26c;
+            color: #e1f26c;
+        }
+
+        /* Depletion Region Patterns */
+        .pattern-dots {
+            background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 10px 10px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col font-sans selection:bg-teal selection:text-black">
+
+    <!-- Header -->
+    <header class="w-full py-4 px-6 border-b border-gray-800 flex flex-col items-center justify-center relative z-10 bg-black/80 backdrop-blur-md">
+        <img src="https://i.postimg.cc/HsxxqcRq/green.png" alt="Logo" class="h-12 mb-2 drop-shadow-[0_0_8px_rgba(225,242,108,0.5)]">
+        <h1 class="text-xl md:text-2xl font-bold tracking-wider gradient-text text-center">P-N Junction Diode Simulator</h1>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Left Panel: Info & Controls -->
+        <section class="lg:col-span-5 flex flex-col h-[80vh] lg:h-auto">
+            <div class="gradient-border flex-1 flex flex-col bg-panel rounded-lg overflow-hidden shadow-2xl">
+                
+                <!-- Tabs -->
+                <div class="flex border-b border-gray-800">
+                    <button class="tab-btn active flex-1 py-3 text-sm font-semibold text-gray-400 hover:text-lime transition-colors" onclick="switchTab('theory')">Theory</button>
+                    <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-400 hover:text-lime transition-colors" onclick="switchTab('procedure')">Procedure</button>
+                    <button class="tab-btn flex-1 py-3 text-sm font-semibold text-gray-400 hover:text-lime transition-colors" onclick="switchTab('controls')">Controls</button>
+                </div>
+
+                <!-- Tab Contents -->
+                <div class="p-5 overflow-y-auto flex-1">
+                    
+                    <!-- Theory Tab -->
+                    <div id="theory" class="tab-content active space-y-4 text-sm md:text-base leading-relaxed text-gray-300">
+                        <h2 class="text-lg font-bold text-white mb-2 border-b border-gray-700 pb-1"><span class="gradient-text">1. Aim and Apparatus</span></h2>
+                        <p><strong class="text-lime">Aim:</strong> To plot the current-voltage relationship and determine the <span class="text-teal font-medium">knee voltage</span> (cut-in voltage) of a P-N junction diode.</p>
+                        <p><strong class="text-lime">Apparatus:</strong></p>
+                        <ul class="list-disc pl-5 space-y-1">
+                            <li>P-N junction diode (Silicon).</li>
+                            <li>Variable DC power supply (0-3V for forward, 0-30V for reverse).</li>
+                            <li>Voltmeter and Milliammeter/Microammeter.</li>
+                            <li>Connecting wires and a key.</li>
+                        </ul>
+                        
+                        <h2 class="text-lg font-bold text-white mt-6 mb-2 border-b border-gray-700 pb-1"><span class="gradient-text">Expected Results</span></h2>
+                        <ul class="list-disc pl-5 space-y-2">
+                            <li><strong class="text-lime">Forward Region:</strong> An exponential rise in current after the threshold voltage (~0.7V for Si).</li>
+                            <li><strong class="text-lime">Reverse Region:</strong> A flat line near zero current followed by a sharp vertical drop at breakdown.</li>
+                        </ul>
+                    </div>
+
+                    <!-- Procedure Tab -->
+                    <div id="procedure" class="tab-content space-y-4 text-sm md:text-base leading-relaxed text-gray-300">
+                        <h2 class="text-lg font-bold text-white mb-2 border-b border-gray-700 pb-1"><span class="gradient-text">2. Experimental Procedure</span></h2>
+                        
+                        <div class="mb-4">
+                            <h3 class="text-lime font-bold">A. Forward Bias Setup</h3>
+                            <p class="text-xs text-gray-400 mb-1">In this mode, the diode allows current to flow easily.</p>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li><strong>Connections:</strong> Connect the Anode (P-side) to positive and Cathode (N-side) to negative.</li>
+                                <li><strong>Measurements:</strong> Increase voltage in small steps. Note readings.</li>
+                                <li><strong>Observation:</strong> Current remains near zero until knee voltage, then increases rapidly.</li>
+                            </ul>
+                        </div>
+
+                        <div>
+                            <h3 class="text-lime font-bold">B. Reverse Bias Setup</h3>
+                            <p class="text-xs text-gray-400 mb-1">In this mode, the diode blocks most current, except tiny leakage.</p>
+                            <ul class="list-disc pl-5 space-y-1">
+                                <li><strong>Connections:</strong> Connect Anode (P) to negative and Cathode (N) to positive.</li>
+                                <li><strong>Measurements:</strong> Increase voltage in larger steps. Use microammeter.</li>
+                                <li><strong>Observation:</strong> Current remains small until breakdown voltage is reached.</li>
+                            </ul>
+                        </div>
+
+                        <h2 class="text-lg font-bold text-white mt-6 mb-2 border-b border-gray-700 pb-1"><span class="gradient-text">Key Precautions</span></h2>
+                        <ul class="list-disc pl-5 space-y-1 text-sm">
+                            <li>Ensure all connections are tight and clean.</li>
+                            <li>Do not exceed the breakdown voltage.</li>
+                            <li>Always check the polarities before switching power on.</li>
+                        </ul>
+                    </div>
+
+                    <!-- Controls Tab -->
+                    <div id="controls" class="tab-content space-y-6">
+                        <div class="bg-black/50 p-4 rounded-lg border border-gray-800">
+                            <h3 class="text-sm text-gray-400 uppercase tracking-widest mb-3">Bias Mode</h3>
+                            <div class="flex gap-2">
+                                <button id="btnForward" class="flex-1 py-2 px-4 rounded font-bold bg-gradient-to-r from-lime to-teal text-black transition-transform active:scale-95 shadow-[0_0_15px_rgba(225,242,108,0.3)]" onclick="setMode('forward')">Forward Bias</button>
+                                <button id="btnReverse" class="flex-1 py-2 px-4 rounded font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors active:scale-95" onclick="setMode('reverse')">Reverse Bias</button>
+                            </div>
+                        </div>
+
+                        <div class="bg-black/50 p-4 rounded-lg border border-gray-800">
+                            <div class="flex justify-between items-end mb-4">
+                                <h3 class="text-sm text-gray-400 uppercase tracking-widest">Power Supply (<span id="supplyMaxLabel">3V</span>)</h3>
+                                <span id="supplyValueLabel" class="text-xl font-mono text-lime">0.00 V</span>
+                            </div>
+                            <input type="range" id="voltageSlider" min="0" max="3" step="0.01" value="0" oninput="handleSliderChange()">
+                        </div>
+
+                        <div class="flex gap-4">
+                            <button class="flex-1 py-2 px-4 rounded border border-teal text-teal hover:bg-teal hover:text-black transition-colors font-medium active:scale-95" onclick="clearData()">Clear Graph</button>
+                        </div>
+
+                        <!-- NEW: Depletion Region Physics Visualization -->
+                        <div class="bg-black/50 p-4 rounded-lg border border-gray-800">
+                            <h3 class="text-sm text-gray-400 uppercase tracking-widest mb-3 flex justify-between items-center">
+                                <span>Depletion Region</span>
+                                <span id="depletionWidthLabel" class="text-xs font-bold text-gray-400 bg-gray-900 px-2 py-1 rounded">NORMAL</span>
+                            </h3>
+                            
+                            <div class="relative w-full h-24 bg-[#0a0a0a] rounded border border-gray-700 flex overflow-hidden shadow-inner">
+                                <!-- P-Type Region -->
+                                <div class="flex-1 bg-gradient-to-r from-lime/20 to-lime/5 relative overflow-hidden border-r border-lime/20 pattern-dots">
+                                    <span class="absolute top-1 left-2 font-bold text-lime/50 text-xs">P-Type (Anode)</span>
+                                    <div class="absolute inset-0 flex flex-wrap gap-2 p-3 justify-center items-center opacity-60">
+                                        <!-- Holes -->
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                        <div class="w-4 h-4 rounded-full border-2 border-lime flex items-center justify-center text-[10px] text-lime font-bold">+</div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Depletion Width Container -->
+                                <div id="depletionRegion" class="w-[20%] bg-gray-900 border-x-2 border-gray-500 flex justify-between items-center transition-all duration-300 ease-out relative z-10 shadow-[inset_0_0_15px_rgba(0,0,0,1)] overflow-hidden">
+                                    <!-- Acceptor Ions (-) on P side -->
+                                    <div class="flex flex-col gap-1 pl-1 opacity-70">
+                                        <div class="w-3.5 h-3.5 rounded-full bg-red-900/60 border border-red-500/50 flex items-center justify-center text-[10px] text-red-300">-</div>
+                                        <div class="w-3.5 h-3.5 rounded-full bg-red-900/60 border border-red-500/50 flex items-center justify-center text-[10px] text-red-300">-</div>
+                                        <div class="w-3.5 h-3.5 rounded-full bg-red-900/60 border border-red-500/50 flex items-center justify-center text-[10px] text-red-300">-</div>
+                                    </div>
+                                    
+                                    <!-- Junction Line -->
+                                    <div class="absolute left-1/2 top-0 bottom-0 w-[1px] bg-white/10 -translate-x-1/2 border-l border-dashed border-gray-600"></div>
+
+                                    <!-- Donor Ions (+) on N side -->
+                                    <div class="flex flex-col gap-1 pr-1 opacity-70">
+                                        <div class="w-3.5 h-3.5 rounded-full bg-blue-900/60 border border-blue-500/50 flex items-center justify-center text-[10px] text-blue-300">+</div>
+                                        <div class="w-3.5 h-3.5 rounded-full bg-blue-900/60 border border-blue-500/50 flex items-center justify-center text-[10px] text-blue-300">+</div>
+                                        <div class="w-3.5 h-3.5 rounded-full bg-blue-900/60 border border-blue-500/50 flex items-center justify-center text-[10px] text-blue-300">+</div>
+                                    </div>
+                                </div>
+
+                                <!-- N-Type Region -->
+                                <div class="flex-1 bg-gradient-to-l from-teal/20 to-teal/5 relative overflow-hidden border-l border-teal/20 pattern-dots">
+                                    <span class="absolute top-1 right-2 font-bold text-teal/50 text-xs">N-Type (Cathode)</span>
+                                    <div class="absolute inset-0 flex flex-wrap gap-2 p-3 justify-center items-center opacity-60">
+                                        <!-- Electrons -->
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                        <div class="w-4 h-4 rounded-full bg-teal flex items-center justify-center text-[10px] text-black font-bold">-</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <p id="depletionDesc" class="text-xs text-gray-400 mt-3 text-center leading-relaxed">
+                                At 0V, a normal depletion region exists at the junction, preventing current flow.
+                            </p>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </section>
+
+        <!-- Right Panel: Visualization & Graph -->
+        <section class="lg:col-span-7 flex flex-col gap-6">
+            
+            <!-- Circuit Diagram & Meters -->
+            <div class="gradient-border bg-panel rounded-lg p-4 flex flex-col md:flex-row gap-4 items-center justify-between shadow-2xl relative">
+                
+                <!-- Circuit Canvas Container -->
+                <div class="w-full md:w-1/2 aspect-video bg-black rounded-lg border border-gray-800 relative flex items-center justify-center p-2">
+                    <canvas id="circuitCanvas" class="w-full h-full object-contain"></canvas>
+                    <div id="biasIndicator" class="absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded bg-lime/20 text-lime border border-lime/50">FORWARD</div>
+                </div>
+
+                <!-- Digital Meters -->
+                <div class="w-full md:w-1/2 flex flex-col gap-4">
+                    <!-- Voltmeter -->
+                    <div class="bg-black border border-gray-800 rounded-lg p-4 relative overflow-hidden group">
+                        <div class="absolute top-0 left-0 w-1 h-full bg-lime"></div>
+                        <h4 class="text-xs text-gray-400 uppercase tracking-widest mb-1 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-lime" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                            Voltmeter (V)
+                        </h4>
+                        <div class="font-mono text-3xl text-white tracking-wider flex items-baseline gap-1 drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">
+                            <span id="meterV">0.00</span>
+                            <span class="text-sm text-gray-500">V</span>
+                        </div>
+                    </div>
+
+                    <!-- Ammeter -->
+                    <div class="bg-black border border-gray-800 rounded-lg p-4 relative overflow-hidden group">
+                        <div class="absolute top-0 left-0 w-1 h-full bg-teal"></div>
+                        <h4 class="text-xs text-gray-400 uppercase tracking-widest mb-1 flex items-center gap-2">
+                            <svg class="w-4 h-4 text-teal" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg>
+                            <span id="ammeterLabel">Ammeter (mA)</span>
+                        </h4>
+                        <div class="font-mono text-3xl text-white tracking-wider flex items-baseline gap-1 drop-shadow-[0_0_5px_rgba(255,255,255,0.5)]">
+                            <span id="meterI">0.00</span>
+                            <span id="meterIUnit" class="text-sm text-gray-500">mA</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- I-V Graph -->
+            <div class="gradient-border bg-panel rounded-lg p-1 flex-1 min-h-[300px] flex flex-col shadow-2xl">
+                <div class="px-4 py-2 border-b border-gray-800 flex justify-between items-center bg-black/40 rounded-t-lg">
+                    <h3 class="text-sm font-bold text-gray-200">I-V Characteristic Curve</h3>
+                    <div class="flex gap-3 text-xs">
+                        <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-lime inline-block"></span> Forward</div>
+                        <div class="flex items-center gap-1"><span class="w-3 h-3 rounded-full bg-teal inline-block"></span> Reverse</div>
+                    </div>
+                </div>
+                <div class="flex-1 relative w-full h-full bg-[#050505] p-2 rounded-b-lg overflow-hidden" id="graphContainer">
+                    <canvas id="graphCanvas" class="w-full h-full block touch-none"></canvas>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <script>
+        // UI Tab Management
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById(tabId).classList.add('active');
+            event.currentTarget.classList.add('active');
+        }
+
+        // --- Physics Simulation & State ---
+        let mode = 'forward'; // 'forward' or 'reverse'
+        let supplyVoltage = 0; // The voltage set by slider
+        let diodeV = 0;
+        let diodeI = 0;
+        
+        let graphData = {
+            forward: [], // {v, i}
+            reverse: []  // {v, i}
+        };
+
+        const ELEMENTS = {
+            btnFwd: document.getElementById('btnForward'),
+            btnRev: document.getElementById('btnReverse'),
+            slider: document.getElementById('voltageSlider'),
+            supLabel: document.getElementById('supplyMaxLabel'),
+            supVal: document.getElementById('supplyValueLabel'),
+            meterV: document.getElementById('meterV'),
+            meterI: document.getElementById('meterI'),
+            amLabel: document.getElementById('ammeterLabel'),
+            amUnit: document.getElementById('meterIUnit'),
+            biasInd: document.getElementById('biasIndicator'),
+            // Depletion elements
+            depletionRegion: document.getElementById('depletionRegion'),
+            depletionWidthLabel: document.getElementById('depletionWidthLabel'),
+            depletionDesc: document.getElementById('depletionDesc')
+        };
+
+        // Initialize Canvases
+        const graphCanvas = document.getElementById('graphCanvas');
+        const gCtx = graphCanvas.getContext('2d');
+        const circuitCanvas = document.getElementById('circuitCanvas');
+        const cCtx = circuitCanvas.getContext('2d');
+
+        function resizeCanvases() {
+            // Graph Canvas
+            const gContainer = document.getElementById('graphContainer');
+            graphCanvas.width = gContainer.clientWidth;
+            graphCanvas.height = gContainer.clientHeight;
+            
+            // Circuit Canvas
+            circuitCanvas.width = circuitCanvas.parentElement.clientWidth;
+            circuitCanvas.height = circuitCanvas.parentElement.clientHeight;
+
+            drawGraph();
+            drawCircuit();
+        }
+        window.addEventListener('resize', resizeCanvases);
+
+        function setMode(newMode) {
+            mode = newMode;
+            supplyVoltage = 0;
+            ELEMENTS.slider.value = 0;
+            
+            if (mode === 'forward') {
+                // UI Updates for Forward
+                ELEMENTS.btnFwd.className = "flex-1 py-2 px-4 rounded font-bold bg-gradient-to-r from-[#e1f26c] to-[#01998e] text-black transition-transform active:scale-95 shadow-[0_0_15px_rgba(225,242,108,0.3)]";
+                ELEMENTS.btnRev.className = "flex-1 py-2 px-4 rounded font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors active:scale-95";
+                ELEMENTS.slider.max = "3";
+                ELEMENTS.slider.step = "0.01";
+                ELEMENTS.supLabel.innerText = "3V";
+                ELEMENTS.amLabel.innerText = "Milliammeter (mA)";
+                ELEMENTS.amUnit.innerText = "mA";
+                ELEMENTS.biasInd.innerText = "FORWARD";
+                ELEMENTS.biasInd.className = "absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded bg-lime/20 text-lime border border-lime/50";
+            } else {
+                // UI Updates for Reverse
+                ELEMENTS.btnRev.className = "flex-1 py-2 px-4 rounded font-bold bg-gradient-to-r from-[#01998e] to-[#e1f26c] text-black transition-transform active:scale-95 shadow-[0_0_15px_rgba(1,153,142,0.3)]";
+                ELEMENTS.btnFwd.className = "flex-1 py-2 px-4 rounded font-bold bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors active:scale-95";
+                ELEMENTS.slider.max = "30";
+                ELEMENTS.slider.step = "0.1";
+                ELEMENTS.supLabel.innerText = "30V";
+                ELEMENTS.amLabel.innerText = "Microammeter (µA)";
+                ELEMENTS.amUnit.innerText = "µA";
+                ELEMENTS.biasInd.innerText = "REVERSE";
+                ELEMENTS.biasInd.className = "absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded bg-teal/20 text-teal border border-teal/50";
+            }
+            
+            handleSliderChange(); // Reset values
+        }
+
+        function calculatePhysics() {
+            if (mode === 'forward') {
+                // Forward Bias Math (Simplified Empirical Model for Silicon Diode)
+                // Supply is 0 to 3V. Diode knee is ~0.7V
+                if (supplyVoltage <= 0.6) {
+                    diodeV = supplyVoltage;
+                    diodeI = 0; // negligible current
+                } else {
+                    // Current rises rapidly, voltage drop stays near 0.7 - 0.8V
+                    diodeI = Math.pow((supplyVoltage - 0.6) * 3.5, 2); // reaching ~70mA at 3V supply
+                    diodeV = 0.6 + 0.05 * Math.log(diodeI + 1);
+                }
+            } else {
+                // Reverse Bias Math
+                // Supply is 0 to 30V. Leakage current is tiny (~1uA). Breakdown at ~25V
+                diodeV = supplyVoltage; // Negative voltage magnitude
+                
+                if (supplyVoltage < 25) {
+                    diodeI = 1; // 1 µA constant leakage
+                } else {
+                    // Breakdown spike (Avalanche breakdown simulation)
+                    diodeI = 1 + Math.pow((supplyVoltage - 25) * 1.5, 2); 
+                }
+            }
+
+            // Ensure values are not NaN and well-bounded
+            diodeV = Math.max(0, diodeV);
+            diodeI = Math.max(0, diodeI);
+        }
+
+        function updateDepletionVisual() {
+            let baseWidth = 20; // Default width percentage at 0V
+            let currentWidth = baseWidth;
+
+            if (mode === 'forward') {
+                // Forward Bias: Depletion shrinks
+                let factor = Math.min(supplyVoltage / 0.7, 1); 
+                currentWidth = baseWidth - (factor * 18); // Shrinks down to 2%
+                
+                ELEMENTS.depletionWidthLabel.innerText = "NARROWING";
+                ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-black bg-lime px-2 py-1 rounded";
+                ELEMENTS.depletionDesc.innerHTML = "Forward bias pushes majority carriers towards the junction, <strong class='text-lime'>narrowing</strong> the depletion region.";
+
+                if (supplyVoltage === 0) {
+                    ELEMENTS.depletionWidthLabel.innerText = "NORMAL";
+                    ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-gray-400 bg-gray-900 px-2 py-1 rounded";
+                    ELEMENTS.depletionDesc.innerText = "At 0V, a normal depletion region exists, preventing current flow.";
+                } else if (supplyVoltage >= 0.6) {
+                    ELEMENTS.depletionWidthLabel.innerText = "OVERCOME";
+                    ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-black bg-gradient-to-r from-lime to-teal px-2 py-1 rounded";
+                    ELEMENTS.depletionDesc.innerHTML = "Potential barrier is overcome! Depletion region is minimized, allowing <strong class='text-white'>significant current flow</strong>.";
+                }
+            } else {
+                // Reverse Bias: Depletion expands
+                let factor = Math.min(supplyVoltage / 30, 1);
+                currentWidth = baseWidth + (factor * 45); // Expands up to 65%
+
+                ELEMENTS.depletionWidthLabel.innerText = "WIDENING";
+                ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-black bg-teal px-2 py-1 rounded";
+                ELEMENTS.depletionDesc.innerHTML = "Reverse bias pulls majority carriers away from the junction, <strong class='text-teal'>widening</strong> the depletion region. Only leakage current flows.";
+
+                if (supplyVoltage === 0) {
+                    ELEMENTS.depletionWidthLabel.innerText = "NORMAL";
+                    ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-gray-400 bg-gray-900 px-2 py-1 rounded";
+                    ELEMENTS.depletionDesc.innerText = "At 0V, a normal depletion region exists, preventing current flow.";
+                } else if (supplyVoltage >= 25) {
+                    ELEMENTS.depletionWidthLabel.innerText = "BREAKDOWN!";
+                    ELEMENTS.depletionWidthLabel.className = "text-xs font-bold text-white bg-red-600 px-2 py-1 rounded animate-pulse";
+                    ELEMENTS.depletionDesc.innerHTML = "<strong class='text-red-500'>Avalanche Breakdown reached!</strong> The high electric field tears electrons from atoms, causing a massive current spike.";
+                }
+            }
+
+            // Apply dynamic width
+            ELEMENTS.depletionRegion.style.width = currentWidth + "%";
+        }
+
+        function updateDataPoints() {
+            // Store point for graphing if it moved significantly
+            let arr = mode === 'forward' ? graphData.forward : graphData.reverse;
+            
+            // Real values for graph mapping
+            let realV = mode === 'forward' ? diodeV : -diodeV;
+            let realI = mode === 'forward' ? diodeI : -diodeI;
+
+            // Only add if array is empty or value changed enough (to prevent massive arrays)
+            if (arr.length === 0) {
+                arr.push({v: realV, i: realI});
+            } else {
+                let lastPt = arr[arr.length - 1];
+                let dv = Math.abs(lastPt.v - realV);
+                let di = Math.abs(lastPt.i - realI);
+                
+                // Add point if voltage changed by >0.02V or current changed significantly
+                if (dv > 0.01 || di > 0.5) {
+                    arr.push({v: realV, i: realI});
+                }
+            }
+
+            // Sort array just in case
+            if (mode === 'forward') {
+                arr.sort((a,b) => a.v - b.v);
+            } else {
+                arr.sort((a,b) => b.v - a.v); // sort descending (negative)
+            }
+        }
+
+        function handleSliderChange() {
+            supplyVoltage = parseFloat(ELEMENTS.slider.value);
+            ELEMENTS.supVal.innerText = supplyVoltage.toFixed(2) + " V";
+            
+            calculatePhysics();
+            updateDepletionVisual();
+            updateDataPoints();
+
+            // Update Meters
+            ELEMENTS.meterV.innerText = diodeV.toFixed(2);
+            ELEMENTS.meterI.innerText = diodeI.toFixed(2);
+
+            // Redraw Visuals
+            drawCircuit();
+            drawGraph();
+        }
+
+        function clearData() {
+            graphData.forward = [];
+            graphData.reverse = [];
+            supplyVoltage = 0;
+            ELEMENTS.slider.value = 0;
+            handleSliderChange();
+        }
+
+        // --- Drawing Logic ---
+
+        function drawCircuit() {
+            const w = circuitCanvas.width;
+            const h = circuitCanvas.height;
+            cCtx.clearRect(0, 0, w, h);
+
+            cCtx.lineWidth = 2;
+            cCtx.strokeStyle = "#4b5563"; // gray-600
+            
+            // Responsive coordinates
+            const cx = w / 2;
+            const cy = h / 2;
+            const boxW = Math.min(w * 0.8, 300);
+            const boxH = Math.min(h * 0.6, 150);
+            
+            const left = cx - boxW/2;
+            const right = cx + boxW/2;
+            const top = cy - boxH/2;
+            const bottom = cy + boxH/2;
+
+            // Wires
+            cCtx.beginPath();
+            cCtx.moveTo(left, top); cCtx.lineTo(right, top);
+            cCtx.moveTo(right, top); cCtx.lineTo(right, bottom);
+            cCtx.moveTo(right, bottom); cCtx.lineTo(left, bottom);
+            cCtx.moveTo(left, bottom); cCtx.lineTo(left, top);
+            cCtx.stroke();
+
+            // Helper to clear wire for component
+            function clearWire(x, y, cw, ch) {
+                cCtx.clearRect(x - cw/2, y - ch/2, cw, ch);
+            }
+
+            // 1. Power Supply (Bottom)
+            clearWire(cx, bottom, 60, 40);
+            cCtx.beginPath();
+            // Draw battery symbol. Long line = +, Short thick line = -
+            let leftIsPos = mode === 'forward'; 
+            
+            cCtx.strokeStyle = "#e1f26c";
+            cCtx.lineWidth = 2;
+            
+            if (leftIsPos) {
+                // + is left
+                cCtx.moveTo(cx - 15, bottom - 15); cCtx.lineTo(cx - 15, bottom + 15); // Long
+                cCtx.lineWidth = 4;
+                cCtx.moveTo(cx + 15, bottom - 8); cCtx.lineTo(cx + 15, bottom + 8); // Short
+                cCtx.fillStyle = "#e1f26c"; cCtx.fillText("+", cx - 30, bottom - 5);
+                cCtx.fillText("-", cx + 20, bottom - 5);
+            } else {
+                // + is right
+                cCtx.lineWidth = 4;
+                cCtx.moveTo(cx - 15, bottom - 8); cCtx.lineTo(cx - 15, bottom + 8); // Short
+                cCtx.lineWidth = 2;
+                cCtx.moveTo(cx + 15, bottom - 15); cCtx.lineTo(cx + 15, bottom + 15); // Long
+                cCtx.fillStyle = "#e1f26c"; cCtx.fillText("-", cx - 30, bottom - 5);
+                cCtx.fillText("+", cx + 20, bottom - 5);
+            }
+            cCtx.stroke();
+            // connecting wires to battery
+            cCtx.lineWidth = 2; cCtx.strokeStyle = "#4b5563";
+            cCtx.beginPath(); cCtx.moveTo(cx - 30, bottom); cCtx.lineTo(cx - 15, bottom); cCtx.stroke();
+            cCtx.beginPath(); cCtx.moveTo(cx + 15, bottom); cCtx.lineTo(cx + 30, bottom); cCtx.stroke();
+
+            // 2. Diode (Top)
+            clearWire(cx, top, 60, 40);
+            cCtx.strokeStyle = "#01998e";
+            cCtx.fillStyle = "#01998e";
+            cCtx.lineWidth = 2;
+            
+            // Diode symbol always points right (P to N)
+            // Left is Anode, Right is Cathode
+            cCtx.beginPath();
+            cCtx.moveTo(cx - 15, top - 15); cCtx.lineTo(cx - 15, top + 15); cCtx.lineTo(cx + 15, top); cCtx.closePath();
+            cCtx.fill();
+            cCtx.beginPath();
+            cCtx.moveTo(cx + 15, top - 15); cCtx.lineTo(cx + 15, top + 15); cCtx.stroke();
+            // connecting wires
+            cCtx.strokeStyle = "#4b5563";
+            cCtx.beginPath(); cCtx.moveTo(cx - 30, top); cCtx.lineTo(cx - 15, top); cCtx.stroke();
+            cCtx.beginPath(); cCtx.moveTo(cx + 15, top); cCtx.lineTo(cx + 30, top); cCtx.stroke();
+
+            // Labels
+            cCtx.font = "10px sans-serif";
+            cCtx.fillStyle = "#aaa";
+            cCtx.textAlign = "center";
+            cCtx.fillText("P", cx - 25, top - 15);
+            cCtx.fillText("N", cx + 25, top - 15);
+
+            // 3. Ammeter (Right vertical)
+            clearWire(right, cy, 30, 30);
+            cCtx.beginPath();
+            cCtx.arc(right, cy, 12, 0, Math.PI * 2);
+            cCtx.fillStyle = "#111";
+            cCtx.fill();
+            cCtx.strokeStyle = "#fff";
+            cCtx.stroke();
+            cCtx.fillStyle = "#fff";
+            cCtx.fillText("A", right, cy + 4);
+
+            // 4. Voltmeter (Parallel to Diode)
+            // Draw parallel wires
+            cCtx.strokeStyle = "#4b5563";
+            cCtx.beginPath();
+            cCtx.moveTo(cx - 40, top); cCtx.lineTo(cx - 40, top - 30);
+            cCtx.lineTo(cx + 40, top - 30); cCtx.lineTo(cx + 40, top);
+            cCtx.stroke();
+            // Voltmeter circle
+            clearWire(cx, top - 30, 30, 30);
+            cCtx.beginPath();
+            cCtx.arc(cx, top - 30, 12, 0, Math.PI * 2);
+            cCtx.fillStyle = "#111"; cCtx.fill();
+            cCtx.strokeStyle = "#fff"; cCtx.stroke();
+            cCtx.fillStyle = "#fff"; cCtx.fillText("V", cx, top - 26);
+
+            // Resistor (Left vertical) - Safety resistor
+            clearWire(left, cy, 20, 60);
+            cCtx.strokeStyle = "#e1f26c";
+            cCtx.beginPath();
+            let rx = left, ry = cy - 20;
+            cCtx.moveTo(rx, ry);
+            for(let i=0; i<4; i++) {
+                cCtx.lineTo(rx - 8, ry + 5);
+                cCtx.lineTo(rx + 8, ry + 15);
+                ry += 10;
+            }
+            cCtx.lineTo(rx, ry + 5);
+            cCtx.stroke();
+
+            // Draw current flow animation dots
+            if (supplyVoltage > 0 && (mode === 'forward' && diodeI > 0.1 || mode === 'reverse' && diodeI > 0.1)) {
+                let t = Date.now() / 1000;
+                let numDots = 8;
+                let perimeter = (boxW * 2) + (boxH * 2);
+                cCtx.fillStyle = mode === 'forward' ? "#e1f26c" : "#01998e";
+                
+                // Speed depends on current
+                let speed = mode === 'forward' ? diodeI * 2 : diodeI * 5;
+                speed = Math.min(speed, 200); // cap speed
+
+                for(let i=0; i<numDots; i++) {
+                    let offset = (t * speed + (i * perimeter / numDots)) % perimeter;
+                    let dotX, dotY;
+                    
+                    // Path mapping (starting from battery positive)
+                    // Flow is counter-clockwise if forward, clockwise if reverse
+                    let d = offset;
+                    
+                    if (mode === 'forward') {
+                        // Flow: Bottom -> Left -> Top -> Right -> Bottom
+                        if (d < boxW/2) { dotX = cx - d; dotY = bottom; }
+                        else if (d < boxW/2 + boxH) { dotX = left; dotY = bottom - (d - boxW/2); }
+                        else if (d < boxW/2 + boxH + boxW) { dotX = left + (d - boxW/2 - boxH); dotY = top; }
+                        else if (d < boxW/2 + boxH * 2 + boxW) { dotX = right; dotY = top + (d - boxW/2 - boxH - boxW); }
+                        else { dotX = right - (d - boxW/2 - boxH * 2 - boxW); dotY = bottom; }
+                    } else {
+                        // Flow: Bottom -> Right -> Top -> Left -> Bottom
+                        if (d < boxW/2) { dotX = cx + d; dotY = bottom; }
+                        else if (d < boxW/2 + boxH) { dotX = right; dotY = bottom - (d - boxW/2); }
+                        else if (d < boxW/2 + boxH + boxW) { dotX = right - (d - boxW/2 - boxH); dotY = top; }
+                        else if (d < boxW/2 + boxH * 2 + boxW) { dotX = left; dotY = top + (d - boxW/2 - boxH - boxW); }
+                        else { dotX = left + (d - boxW/2 - boxH * 2 - boxW); dotY = bottom; }
+                    }
+
+                    cCtx.beginPath();
+                    cCtx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+                    cCtx.fill();
+                }
+                
+                // Request next frame for animation
+                requestAnimationFrame(drawCircuit);
+            }
+        }
+
+        function drawGraph() {
+            const w = graphCanvas.width;
+            const h = graphCanvas.height;
+            gCtx.clearRect(0, 0, w, h);
+
+            // Graph Coordinates Mapping
+            // Educational scale: Split scale for clarity
+            // Forward V: 0 to 1V. Reverse V: 0 to -30V
+            // Forward I: 0 to 80mA. Reverse I: 0 to -80uA
+            
+            const originX = w * 0.7; // shift right to give reverse bias more room on X
+            const originY = h * 0.7; // shift down to give forward bias more room on Y
+
+            // Scales
+            const pxPerV_fwd = (w - originX - 20) / 1.0;  // 1V takes remaining right space
+            const pxPerV_rev = (originX - 20) / 35.0;     // 35V takes left space
+            
+            const pxPerI_fwd = (originY - 20) / 80.0;     // 80mA takes top space
+            const pxPerI_rev = (h - originY - 20) / 80.0; // 80uA takes bottom space
+
+            // Grid & Axes
+            gCtx.lineWidth = 1;
+            gCtx.strokeStyle = "#333";
+            gCtx.beginPath();
+            
+            // X-axis
+            gCtx.moveTo(0, originY); gCtx.lineTo(w, originY);
+            // Y-axis
+            gCtx.moveTo(originX, 0); gCtx.lineTo(originX, h);
+            gCtx.stroke();
+
+            // Labels & Ticks
+            gCtx.fillStyle = "#888";
+            gCtx.font = "10px sans-serif";
+            gCtx.textAlign = "center";
+            
+            // X ticks (Forward: 0.2, 0.4, 0.6, 0.8)
+            for(let v=0.2; v<=1.0; v+=0.2) {
+                let x = originX + v * pxPerV_fwd;
+                gCtx.fillRect(x, originY-3, 1, 6);
+                gCtx.fillText(v.toFixed(1), x, originY + 15);
+            }
+            gCtx.textAlign = "left";
+            gCtx.fillStyle = "#e1f26c";
+            gCtx.fillText("V (Volts)", w - 45, originY - 10);
+
+            // X ticks (Reverse: -10, -20, -30)
+            gCtx.fillStyle = "#888";
+            gCtx.textAlign = "center";
+            for(let v=-10; v>=-30; v-=10) {
+                let x = originX + v * pxPerV_rev; // v is negative, moves left
+                gCtx.fillRect(x, originY-3, 1, 6);
+                gCtx.fillText(v, x, originY + 15);
+            }
+
+            // Y ticks (Forward: 20, 40, 60)
+            gCtx.textAlign = "right";
+            gCtx.textBaseline = "middle";
+            for(let i=20; i<=80; i+=20) {
+                let y = originY - i * pxPerI_fwd;
+                gCtx.fillRect(originX-3, y, 6, 1);
+                gCtx.fillText(i, originX - 8, y);
+            }
+            gCtx.fillStyle = "#e1f26c";
+            gCtx.fillText("I (mA)", originX - 8, 15);
+
+            // Y ticks (Reverse: -20, -40, -60)
+            gCtx.fillStyle = "#888";
+            for(let i=-20; i>=-80; i-=20) {
+                let y = originY - i * pxPerI_rev; // i is negative, moves down
+                gCtx.fillRect(originX-3, y, 6, 1);
+                gCtx.fillText(i, originX - 8, y);
+            }
+            gCtx.fillStyle = "#01998e";
+            gCtx.fillText("I (µA)", originX - 8, h - 15);
+
+
+            // Function to map data to canvas coordinates
+            function getPoint(pt) {
+                let cx, cy;
+                if (pt.v >= 0) cx = originX + pt.v * pxPerV_fwd;
+                else cx = originX + pt.v * pxPerV_rev;
+
+                if (pt.i >= 0) cy = originY - pt.i * pxPerI_fwd;
+                else cy = originY - pt.i * pxPerI_rev;
+                
+                return {x: cx, y: cy};
+            }
+
+            // Draw Forward Curve
+            if (graphData.forward.length > 0) {
+                gCtx.beginPath();
+                gCtx.strokeStyle = "#e1f26c";
+                gCtx.lineWidth = 3;
+                gCtx.lineCap = "round";
+                gCtx.lineJoin = "round";
+                
+                let start = getPoint(graphData.forward[0]);
+                gCtx.moveTo(start.x, start.y);
+                for(let i=1; i<graphData.forward.length; i++) {
+                    let p = getPoint(graphData.forward[i]);
+                    gCtx.lineTo(p.x, p.y);
+                }
+                gCtx.stroke();
+                
+                // Glow effect
+                gCtx.shadowColor = "#e1f26c";
+                gCtx.shadowBlur = 10;
+                gCtx.stroke();
+                gCtx.shadowBlur = 0;
+            }
+
+            // Draw Reverse Curve
+            if (graphData.reverse.length > 0) {
+                gCtx.beginPath();
+                gCtx.strokeStyle = "#01998e";
+                gCtx.lineWidth = 3;
+                gCtx.lineCap = "round";
+                gCtx.lineJoin = "round";
+                
+                let start = getPoint(graphData.reverse[0]);
+                gCtx.moveTo(start.x, start.y);
+                for(let i=1; i<graphData.reverse.length; i++) {
+                    let p = getPoint(graphData.reverse[i]);
+                    gCtx.lineTo(p.x, p.y);
+                }
+                gCtx.stroke();
+
+                // Glow effect
+                gCtx.shadowColor = "#01998e";
+                gCtx.shadowBlur = 10;
+                gCtx.stroke();
+                gCtx.shadowBlur = 0;
+            }
+
+            // Draw Current Marker
+            if (supplyVoltage > 0) {
+                let curRealV = mode === 'forward' ? diodeV : -diodeV;
+                let curRealI = mode === 'forward' ? diodeI : -diodeI;
+                let cp = getPoint({v: curRealV, i: curRealI});
+
+                gCtx.beginPath();
+                gCtx.arc(cp.x, cp.y, 6, 0, Math.PI*2);
+                gCtx.fillStyle = "#fff";
+                gCtx.fill();
+                gCtx.strokeStyle = mode === 'forward' ? "#e1f26c" : "#01998e";
+                gCtx.lineWidth = 2;
+                gCtx.stroke();
+
+                // Dotted line to axes
+                gCtx.beginPath();
+                gCtx.setLineDash([4, 4]);
+                gCtx.strokeStyle = "rgba(255,255,255,0.3)";
+                gCtx.moveTo(cp.x, originY);
+                gCtx.lineTo(cp.x, cp.y);
+                gCtx.lineTo(originX, cp.y);
+                gCtx.stroke();
+                gCtx.setLineDash([]);
+            }
+        }
+
+        // Init
+        setTimeout(() => {
+            resizeCanvases();
+            setMode('forward');
+        }, 100);
+
+    </script>
+</body>
+</html>
